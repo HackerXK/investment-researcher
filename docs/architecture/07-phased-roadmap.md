@@ -263,12 +263,14 @@ src/investment_researcher/ingestion/
   - [ ] From 10-K "Customers" / "Suppliers" sections (text mining)
   - [ ] From publicly available supply chain databases
   - [ ] From news articles mentioning supply relationships
+  - [ ] **Populate edge properties**: product_category, dependency_level, is_sole_source, revenue_pct, contract_value_usd (see [03-data-ingestion.md](03-data-ingestion.md) § Edge Property Extraction Strategy)
 - [ ] Executive/board member linking:
   - [ ] Extract from DEF 14A (proxy statement) filings
   - [ ] Link people across companies
 - [ ] Competitive dynamics:
   - [ ] Industry peer grouping (GICS-based)
   - [ ] COMPETES_WITH relationships from filing text
+  - [ ] **Populate edge properties**: market_segment, intensity, market_share_a/b, differentiation, threat_level (see [02-graph-schema.md](02-graph-schema.md) § COMPETES_WITH)
 - [ ] Commodity dependencies:
   - [ ] Map key commodities to industries
   - [ ] Company-commodity relationships from filing risk factors

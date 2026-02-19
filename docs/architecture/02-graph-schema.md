@@ -306,21 +306,52 @@ Hedge funds, mutual funds, pension funds, and other institutional investors that
 ```cypher
 // Supply Chain
 (:Company)-[:SUPPLIES_TO {
-  product_category: STRING,   -- "semiconductors", "displays"
-  revenue_pct: FLOAT,         -- % of supplier's revenue from this customer
-  source: STRING,              -- "10-K", "news", "supply_chain_db"
-  confidence: FLOAT,           -- 0.0-1.0
-  valid_from: STRING,
-  valid_to: STRING
+  // ── Core metadata ────────────────────────────────────────────────────────
+  confidence: FLOAT,           -- 0.0-1.0 (decays with staleness + hop distance)
+  source: STRING,              -- "AAPL 10-K 2024 p.12", "TSMC earnings call"
+  last_confirmed: STRING,      -- ISO date when relationship was last verified
+  created_at: STRING,          -- ISO date when edge was first added to graph
+  
+  // ── Supply chain specifics ──────────────────────────────────────────────
+  product_category: STRING,    -- "EUV lithography machines", "5nm GPU chips"
+  dependency_level: STRING,    -- "critical" | "important" | "optional"
+  is_sole_source: BOOL,        -- Whether supplier is the ONLY source
+  contract_value_usd: FLOAT,   -- Estimated annual spend (if disclosed)
+  revenue_pct: FLOAT,          -- % of supplier's revenue from this customer
+  volume_estimate: STRING,     -- "100M+ units/year", "50% of wafer capacity"
+  
+  // ── Temporal validity ───────────────────────────────────────────────────
+  valid_from: STRING,          -- Start of supply relationship
+  valid_to: STRING,            -- Null if ongoing, date if terminated
+  
+  // ── Risk indicators ─────────────────────────────────────────────────────
+  geographic_risk: STRING,     -- "Taiwan", "China", "Multi-region" (supply chain risk)
+  alternative_suppliers: INT,  -- Number of known alternatives (0 = sole source)
+  lead_time_weeks: INT         -- Typical order-to-delivery time
 }]->(:Company)
 
-(:Company)-[:CUSTOMER_OF]->(:Company)  // Inverse of SUPPLIES_TO
+(:Company)-[:CUSTOMER_OF]->(:Company)  // Inverse of SUPPLIES_TO (auto-created)
 
 // Competition
 (:Company)-[:COMPETES_WITH {
-  market_segment: STRING,     -- "smartphones", "cloud computing"
-  intensity: STRING,           -- "direct", "indirect", "emerging"
-  source: STRING,
+  // ── Core metadata ────────────────────────────────────────────────────────
+  confidence: FLOAT,           -- 0.0-1.0
+  source: STRING,              -- "Industry analysis", "10-K competitive section"
+  last_confirmed: STRING,
+  created_at: STRING,
+  
+  // ── Competitive dynamics ────────────────────────────────────────────────
+  market_segment: STRING,      -- "high-end data center GPUs", "smartphone SoCs"
+  intensity: STRING,           -- "direct" | "partial" | "adjacent" | "emerging"
+  geographic_overlap: [STRING],-- ["North America", "Europe", "Asia"]
+  market_share_a: FLOAT,       -- Company A's market share in segment (0.0-1.0)
+  market_share_b: FLOAT,       -- Company B's market share in segment
+  
+  // ── Strategy indicators ─────────────────────────────────────────────────
+  differentiation: STRING,     -- "price", "performance", "ecosystem", "integration"
+  competitive_moat: STRING,    -- "patent portfolio", "brand", "network effects"
+  threat_level: STRING,        -- "existential" | "significant" | "moderate" | "low"
+  
   valid_from: STRING
 }]->(:Company)
 
@@ -365,17 +396,24 @@ Hedge funds, mutual funds, pension funds, and other institutional investors that
 
 ```cypher
 (:Company)-[:HAS_EXECUTIVE {
-  title: STRING,              -- "CEO", "CFO", "CTO"
+  title: STRING,              -- "CEO", "CFO", "CTO", "Chief Scientist"
   start_date: STRING,
-  end_date: STRING,
-  compensation_usd: FLOAT
+  end_date: STRING,           -- null if currently serving
+  compensation_usd: FLOAT,    -- Most recent disclosed compensation
+  stock_ownership_pct: FLOAT, -- % of company owned by this executive
+  source: STRING,             -- "DEF 14A 2024", "Press release"
+  last_confirmed: STRING
 }]->(:Person)
 
 (:Company)-[:HAS_BOARD_MEMBER {
-  role: STRING,               -- "Chairman", "Independent Director"
-  committee: [STRING],        -- ["Audit", "Compensation"]
+  role: STRING,               -- "Chairman", "Independent Director", "Lead Director"
+  committee: [STRING],        -- ["Audit", "Compensation", "Governance"]
+  is_independent: BOOL,       -- Independent director vs. insider
   start_date: STRING,
-  end_date: STRING
+  end_date: STRING,           -- null if currently serving
+  stock_ownership_shares: INT,-- Shares owned
+  source: STRING,             -- "DEF 14A 2024"
+  last_confirmed: STRING
 }]->(:Person)
 ```
 
@@ -567,87 +605,385 @@ Periodically review `RELATED_TO` edges and promote to named relationship types. 
 
 ---
 
+## Edge Property Best Practices
+
+### Why Rich Edge Properties Matter
+
+The difference between basic and enriched edges is the difference between **generic analysis** and **actionable intelligence**:
+
+**Before** (basic `SUPPLIES_TO` with no properties):
+> "TSMC supplies Apple. A TSMC disruption would affect Apple."
+
+**After** (enriched with `dependency_level`, `is_sole_source`, `product_category`):
+> "TSMC is Apple's **sole-source supplier** for A-series and M-series chips (5nm/3nm process), representing **critical dependency** per Apple's 10-K risk factors. A TSMC fab disruption would **immediately halt** iPhone and Mac production with **no alternative supplier** available. Estimated impact: $200B+ annual revenue at risk. Confidence: 0.95."
+
+This is what separates institutional-grade research from surface-level analysis.
+
+### Property Population Strategy
+
+| Property | Phase 0 (Manual) | Phase 2+ (Automated) | Data Source |
+|----------|------------------|----------------------|-------------|
+| `confidence` | ✓ Manual estimate | LLM multi-source scoring | Filing text + news corroboration |
+| `source` | ✓ "10-K 2024" | Full citation with page | XBRL metadata + document parser |
+| `product_category` | ✓ Hand-coded | LLM extraction | "Principal Suppliers" section |
+| `dependency_level` | ✓ Domain knowledge | LLM + keyword detection | "Risk Factors" mentions of "sole source", "critical" |
+| `is_sole_source` | ✓ Known facts | Regex + LLM confirmation | "Sole source", "single supplier" in 10-K |
+| `contract_value_usd` | Manual (if public) | Scrape from earnings calls | Transcript parsing + UMM disambiguation |
+| `market_segment` | ✓ Industry taxonomy | LLM extraction | 10-K "Competition" section |
+| `geographic_overlap` | Industry knowledge | Company "Geographic Revenue" sections | 10-K Item 1, segment reporting |
+
+### Edge Property Validation Rules
+
+1. **Confidence decay**: All edges have a base confidence that decays with:
+   - **Staleness**: Multiply by 0.9 if 90-365 days since `last_confirmed`, 0.7 if 1-2 years, 0.5 if 2+ years
+   - **Hop distance**: See "Confidence & Data Quality Principles" above — 0.9 per hop
+   - Combined: `effective_confidence = base_confidence × staleness_multiplier × hop_decay`
+
+2. **Source citation mandatory**: Every edge MUST have a `source` property. No exceptions. If source is unknown, mark as `"source": "manual_seed_unverified"` and flag for review.
+
+3. **Temporal validity**: For time-sensitive relationships (SUPPLIES_TO, HOLDS_POSITION), always populate `last_confirmed`. If > 1 year old, flag for re-verification.
+
+4. **Mutual exclusivity checks**:
+   - `is_sole_source = true` → `alternative_suppliers = 0`
+   - `dependency_level = "critical"` → `is_sole_source = true OR alternative_suppliers ≤ 2`
+
+5. **Numeric range validation**:
+   - `confidence`: 0.0–1.0
+   - `revenue_pct`: 0.0–1.0 (can exceed 1.0 if supplier has multiple revenue streams)
+   - `market_share_a/b`: 0.0–1.0
+
+### Query Pattern: Using Edge Properties for Precision
+
+```cypher
+// Find CRITICAL supply chain dependencies (highest disruption risk)
+MATCH (supplier:Company)-[r:SUPPLIES_TO]->(customer:Company)
+WHERE r.dependency_level = 'critical'
+  AND r.is_sole_source = true
+  AND r.confidence > 0.8
+  AND date(r.last_confirmed) > date('2025-01-01')  // Recent confirmation
+RETURN supplier.ticker,
+       customer.ticker,
+       r.product_category,
+       r.contract_value_usd,
+       r.geographic_risk,
+       r.last_confirmed
+ORDER BY r.contract_value_usd DESC
+```
+
+```cypher
+// Find direct competitors in a specific market with significant overlap
+MATCH (c:Company {ticker: 'NVDA'})-[r:COMPETES_WITH]-(competitor:Company)
+WHERE r.intensity = 'direct'
+  AND r.market_segment CONTAINS 'GPU'
+  AND r.confidence > 0.85
+RETURN competitor.ticker,
+       r.market_segment,
+       r.market_share_a AS nvda_share,
+       r.market_share_b AS competitor_share,
+       r.differentiation,
+       r.threat_level
+ORDER BY r.market_share_b DESC
+```
+
+---
+
 ## Example Graph Traversals (Ripple Effect Queries)
 
 ### "Which companies are affected if TSMC has production issues?"
+
 ```cypher
-// 1-hop: Direct customers
-MATCH (tsmc:Company {ticker: "TSM"})<-[:SUPPLIES_TO]-(supplier)
-MATCH (tsmc)-[:SUPPLIES_TO]->(customer:Company)
-RETURN customer.ticker, customer.name
+// 1-hop: Direct customers with CRITICAL dependencies
+MATCH (tsmc:Company {ticker: "TSM"})-[r:SUPPLIES_TO]->(customer:Company)
+WHERE r.dependency_level IN ['critical', 'important']
+  AND r.confidence > 0.8
+RETURN customer.ticker,
+       customer.name,
+       r.product_category,
+       r.dependency_level,
+       r.is_sole_source,
+       r.contract_value_usd,
+       r.confidence
+ORDER BY r.contract_value_usd DESC
 
-// 2-hop: Customers of TSMC's customers (ripple)
-MATCH (tsmc:Company {ticker: "TSM"})-[:SUPPLIES_TO]->(c1:Company)-[:SUPPLIES_TO]->(c2:Company)
-RETURN c1.ticker AS direct_impact, c2.ticker AS ripple_impact
+// 2-hop: Ripple effects with confidence decay
+MATCH path = (tsmc:Company {ticker: "TSM"})-[r1:SUPPLIES_TO]->(c1:Company)-[r2:SUPPLIES_TO]->(c2:Company)
+WHERE r1.confidence > 0.8 AND r2.confidence > 0.7
+WITH c1, c2, r1, r2,
+     (r1.confidence * 0.9) AS hop1_confidence,                    // 1st hop decay
+     (r1.confidence * 0.9 * r2.confidence * 0.9) AS hop2_confidence  // 2nd hop decay
+RETURN c1.ticker AS direct_customer,
+       c1.name AS direct_name,
+       r1.product_category AS tsmc_supplies,
+       c2.ticker AS ripple_customer,
+       c2.name AS ripple_name,
+       r2.product_category AS c1_supplies,
+       round(hop1_confidence, 3) AS c1_confidence,
+       round(hop2_confidence, 3) AS c2_confidence,
+       CASE
+         WHEN hop2_confidence < 0.7 THEN 'speculative - needs corroboration'
+         ELSE 'reliable'
+       END AS confidence_assessment
+ORDER BY hop2_confidence DESC
+LIMIT 20
 
-// Multi-hop with industry context
-MATCH path = (tsmc:Company {ticker: "TSM"})-[:SUPPLIES_TO|COMPETES_WITH|PARTNER_WITH*1..3]-(affected:Company)
+// Geographic concentration risk: Find customers dependent on Taiwan-based supply
+MATCH (tsmc:Company {ticker: "TSM"})-[r:SUPPLIES_TO]->(customer:Company)
+WHERE r.geographic_risk = 'Taiwan'
+  AND r.dependency_level = 'critical'
+WITH customer, 
+     COUNT{(customer)-[r2:SUPPLIES_TO]->(other) WHERE r2.geographic_risk = 'Taiwan'} AS taiwan_suppliers
+WHERE taiwan_suppliers > 0
+RETURN customer.ticker,
+       customer.name,
+       taiwan_suppliers AS total_taiwan_dependencies,
+       'Taiwan blockade scenario: severe impact' AS risk_assessment
+ORDER BY taiwan_suppliers DESC
+
+// Multi-hop with industry context and edge property filtering
+MATCH path = (tsmc:Company {ticker: "TSM"})-[rels:SUPPLIES_TO|COMPETES_WITH|PARTNER_WITH*1..3]-(affected:Company)
+WHERE ALL(r IN rels WHERE r.confidence > 0.75)  // Filter low-confidence edges
 MATCH (affected)-[:OPERATES_IN]->(ind:Industry)
-RETURN affected.ticker, affected.name, ind.name,
-       length(path) AS hops,
-       [r IN relationships(path) | type(r)] AS relationship_chain
-ORDER BY hops ASC
+WITH affected, ind, 
+     length(path) AS hops,
+     [r IN relationships(path) | {type: type(r), confidence: r.confidence}] AS rel_details,
+     reduce(conf = 1.0, r IN relationships(path) | conf * r.confidence * 0.9) AS path_confidence
+RETURN affected.ticker,
+       affected.name,
+       ind.name AS industry,
+       hops,
+       round(path_confidence, 3) AS overall_confidence,
+       rel_details AS relationship_chain
+ORDER BY hops ASC, path_confidence DESC
+LIMIT 50
 ```
 
 ### "How might rising interest rates affect the tech sector?"
+
 ```cypher
+// Find industries and companies negatively correlated with interest rates
 MATCH (rate:MacroIndicator {name: "Federal Funds Rate"})
 MATCH (ind:Industry)-[a:AFFECTED_BY]->(rate)
 MATCH (c:Company)-[:OPERATES_IN]->(ind)
 WHERE a.correlation < -0.3  // Negatively correlated industries
-RETURN c.ticker, c.name, ind.name, a.correlation, a.mechanism
-ORDER BY a.correlation ASC
+  AND a.confidence > 0.7
+WITH c, ind, a,
+     // Companies with high debt loads are more exposed to rate increases
+     CASE 
+       WHEN c.debt_to_equity > 2.0 THEN 'high_debt_risk'
+       WHEN c.debt_to_equity > 1.0 THEN 'moderate_debt_risk'
+       ELSE 'low_debt_risk'
+     END AS debt_risk_tier
+RETURN c.ticker,
+       c.name,
+       ind.name AS industry,
+       round(a.correlation, 3) AS rate_correlation,
+       a.mechanism AS impact_mechanism,
+       a.lag_months AS effect_delay_months,
+       c.debt_to_equity,
+       debt_risk_tier,
+       // Worst case: high correlation + high debt + short lag
+       CASE
+         WHEN a.correlation < -0.5 AND c.debt_to_equity > 2.0 AND a.lag_months < 3
+           THEN 'severe_impact_likely'
+         WHEN a.correlation < -0.4 AND c.debt_to_equity > 1.5
+           THEN 'significant_impact_likely'
+         ELSE 'moderate_impact'
+       END AS risk_assessment
+ORDER BY a.correlation ASC, c.debt_to_equity DESC
+LIMIT 30
 ```
 
 ### "Which Congress members recently bought defense stocks?"
+
 ```cypher
+// Congressional defense stock purchases + committee overlap analysis
 MATCH (l:Legislator)-[:DISCLOSED_TRADE]->(t:CongressionalTrade)-[:INVOLVES]->(c:Company)
 MATCH (c)-[:OPERATES_IN]->(ind:Industry {name: "Aerospace & Defense"})
 WHERE t.transaction_type = "purchase"
-  AND t.transaction_date > datetime().epochMillis - duration({days: 90}).epochMillis
-RETURN l.name, l.party, l.chamber, c.ticker, c.name,
-       t.transaction_date, t.amount_range_low, t.amount_range_high
-ORDER BY t.transaction_date DESC
+  AND date(t.transaction_date) > date() - duration({days: 90})
+OPTIONAL MATCH (l)-[serves:SERVES_ON_COMMITTEE]->(oversight_ind:Industry)
+WHERE oversight_ind = ind
+WITH l, c, t, serves,
+     CASE WHEN serves IS NOT NULL THEN true ELSE false END AS has_oversight
+RETURN l.name,
+       l.party,
+       l.chamber,
+       l.state,
+       c.ticker,
+       c.name,
+       t.transaction_date,
+       t.amount_range_low,
+       t.amount_range_high,
+       has_oversight,
+       CASE 
+         WHEN has_oversight THEN serves.committee_name 
+         ELSE null 
+       END AS oversight_committee,
+       CASE
+         WHEN has_oversight THEN 'POTENTIAL CONFLICT - committee oversight + trading'
+         ELSE 'no direct committee oversight'
+       END AS conflict_flag
+ORDER BY t.transaction_date DESC, has_oversight DESC
 ```
 
 ### "What legislation could affect the semiconductor industry?"
+
 ```cypher
+// Active legislation with potential market impact on semiconductors
 MATCH (leg:Legislation)-[a:AFFECTS]->(ind:Industry)
-WHERE ind.name CONTAINS "Semiconductor" AND leg.status <> "vetoed"
-RETURN leg.title, leg.status, a.impact_type, a.direction, leg.last_action_date
-ORDER BY leg.last_action_date DESC
+WHERE ind.name CONTAINS "Semiconductor"
+  AND leg.status IN ['committee', 'passed_house', 'passed_senate', 'enacted']
+  AND a.confidence > 0.7
+RETURN leg.bill_id,
+       leg.title,
+       leg.status,
+       a.impact_type,
+       a.direction,
+       a.confidence AS impact_confidence,
+       a.source AS analysis_source,
+       leg.last_action_date,
+       // Prioritize by proximity to becoming law + impact direction
+       CASE
+         WHEN leg.status = 'enacted' AND a.direction = 'positive' THEN 1
+         WHEN leg.status = 'enacted' AND a.direction = 'negative' THEN 2
+         WHEN leg.status = 'passed_senate' THEN 3
+         WHEN leg.status = 'passed_house' THEN 4
+         ELSE 5
+       END AS urgency_rank
+ORDER BY urgency_rank ASC, leg.last_action_date DESC
 ```
 
 ### "What are the top institutional holders buying this quarter?"
+
 ```cypher
+// New positions by top funds with momentum analysis
 MATCH (ih:InstitutionalHolder)-[h:HOLDS_POSITION]->(c:Company)
-WHERE h.quarter = "Q4-2025" AND h.position_type = "new"
+WHERE h.quarter = "Q4-2025"
+  AND h.position_type IN ['new', 'increased']
   AND ih.aum_usd > 10000000000  // Top funds (AUM > $10B)
-RETURN ih.name, c.ticker, c.name, h.value_usd, h.shares
+WITH ih, c, h,
+     h.value_usd / ih.aum_usd AS position_size_pct
+WHERE position_size_pct > 0.01  // At least 1% of AUM = conviction buy
+RETURN ih.name AS fund,
+       ih.holder_type,
+       ih.aum_usd / 1000000000 AS aum_billions,
+       c.ticker,
+       c.name,
+       h.position_type,
+       h.value_usd / 1000000 AS value_millions,
+       h.shares,
+       round(position_size_pct * 100, 2) AS pct_of_fund_aum,
+       // Larger position = higher conviction
+       CASE
+         WHEN position_size_pct > 0.05 THEN 'high_conviction'
+         WHEN position_size_pct > 0.02 THEN 'moderate_conviction'
+         ELSE 'exploratory_position'
+       END AS conviction_signal
 ORDER BY h.value_usd DESC
 LIMIT 50
 ```
 
-### "Ripple effect: Congress member trades + committee oversight + legislation"
+### "Multi-domain ripple: Congress trades + legislation + supply chain + institutional positioning"
+
 ```cypher
-// Find suspicious patterns: legislator on committee that oversees an industry
-// where they recently traded stocks
-MATCH (l:Legislator)-[:SERVES_ON_COMMITTEE]->(ind:Industry)
-MATCH (l)-[:DISCLOSED_TRADE]->(t:CongressionalTrade)-[:INVOLVES]->(c:Company)
-MATCH (c)-[:OPERATES_IN]->(ind)
-WHERE t.transaction_date > "2025-01-01"
-RETURN l.name, l.party, ind.name, c.ticker, c.name,
-       t.transaction_type, t.amount_range_low, t.transaction_date
-ORDER BY t.transaction_date DESC
+// THIS IS THE INSTITUTIONAL-GRADE ANALYSIS EDGE PROPERTIES ENABLE
+// Scenario: Senator on Armed Services Committee buys defense stock. What's the full picture?
+
+MATCH (senator:Legislator {name: "Mark Kelly"})-[serves:SERVES_ON_COMMITTEE]->(defense_ind:Industry {name: "Aerospace & Defense"})
+MATCH (senator)-[:DISCLOSED_TRADE]->(trade:CongressionalTrade)-[:INVOLVES]->(defense_co:Company)
+MATCH (defense_co)-[:OPERATES_IN]->(defense_ind)
+
+// Is there relevant legislation?
+OPTIONAL MATCH (legislation:Legislation)-[affects:AFFECTS]->(defense_ind)
+WHERE legislation.status IN ['committee', 'passed_house', 'passed_senate']
+  AND date(legislation.last_action_date) > date(trade.transaction_date) - duration({days: 180})
+  
+// Who supplies this defense contractor? (supply chain exposure)
+OPTIONAL MATCH (supplier:Company)-[supplies:SUPPLIES_TO]->(defense_co)
+WHERE supplies.dependency_level IN ['critical', 'important']
+  AND supplies.confidence > 0.8
+
+// Are top institutions also buying? (smart money corroboration)
+OPTIONAL MATCH (institution:InstitutionalHolder)-[holds:HOLDS_POSITION]->(defense_co)
+WHERE holds.quarter = "Q4-2025"
+  AND holds.position_type IN ['new', 'increased']
+  AND institution.aum_usd > 50000000000  // Only top-tier funds (>$50B AUM)
+
+RETURN senator.name AS legislator,
+       serves.committee_name AS committee,
+       serves.role AS committee_role,
+       defense_co.ticker AS company,
+       defense_co.name AS company_name,
+       trade.transaction_type AS trade_type,
+       trade.transaction_date AS trade_date,
+       trade.amount_range_high / 1000 AS trade_amount_thousands,
+       
+       // Legislation context
+       COLLECT(DISTINCT {
+         bill: legislation.bill_id,
+         title: legislation.title,
+         status: legislation.status,
+         impact: affects.direction,
+         impact_type: affects.impact_type
+       }) AS related_legislation,
+       
+       // Supply chain exposure (2nd order impact)
+       COLLECT(DISTINCT {
+         supplier: supplier.ticker,
+         supplies: supplies.product_category,
+         dependency: supplies.dependency_level,
+         is_sole_source: supplies.is_sole_source
+       }) AS critical_suppliers,
+       
+       // Institutional corroboration
+       COLLECT(DISTINCT {
+         fund: institution.name,
+         position_change: holds.position_type,
+         value_millions: holds.value_usd / 1000000
+       }) AS institutional_activity,
+       
+       // Signal strength assessment
+       CASE
+         WHEN SIZE(related_legislation) > 0 AND SIZE(institutional_activity) > 0
+           THEN 'STRONG SIGNAL - committee position + pending legislation + institutional buying'
+         WHEN SIZE(related_legislation) > 0
+           THEN 'MODERATE SIGNAL - committee position + pending legislation'
+         WHEN SIZE(institutional_activity) > 0
+           THEN 'MODERATE SIGNAL - committee insider + smart money alignment'
+         ELSE 'WEAK SIGNAL - isolated trade, no corroboration'
+       END AS signal_strength
+
+LIMIT 1
 ```
 
-### "Find companies with shared board members"
+### "Find companies with shared board members (interlock analysis)"
+
 ```cypher
-MATCH (c1:Company)-[:HAS_BOARD_MEMBER]->(p:Person)<-[:HAS_BOARD_MEMBER]-(c2:Company)
+// Board interlocks can signal information flow or strategic alignment
+MATCH (c1:Company)-[r1:HAS_BOARD_MEMBER]->(p:Person)<-[r2:HAS_BOARD_MEMBER]-(c2:Company)
 WHERE c1.ticker < c2.ticker  // Avoid duplicates
-RETURN c1.ticker, c2.ticker, p.name, 
-       count(p) AS shared_members
-ORDER BY shared_members DESC
+  AND r1.is_independent = true
+  AND r2.is_independent = true  // Focus on independent directors (reduce noise)
+WITH c1, c2, p, r1, r2
+WHERE date(r1.end_date) IS NULL AND date(r2.end_date) IS NULL  // Currently serving
+RETURN c1.ticker AS company_a,
+       c1.name AS name_a,
+       c2.ticker AS company_b,
+       c2.name AS name_b,
+       p.name AS shared_director,
+       r1.role AS role_at_a,
+       r2.role AS role_at_b,
+       r1.committee AS committees_at_a,
+       r2.committee AS committees_at_b,
+       // Does this create strategic information flow?
+       CASE
+         WHEN 'Audit' IN r1.committee AND 'Audit' IN r2.committee
+           THEN 'Financial oversight interlock'
+         WHEN r1.role CONTAINS 'Chairman' OR r2.role CONTAINS 'Chairman'
+           THEN 'Executive-level interlock'
+         ELSE 'Board-level connection'
+       END AS interlock_significance
+ORDER BY company_a, company_b
 ```
 
 ---

@@ -456,6 +456,79 @@ This pipeline covers company-level financial data (Tier 0) and macro-economic in
 | **Relationships** | `SUPPLIES_TO`, `COMPETES_WITH`, `PARTNERS_WITH` |
 | **Notes** | **This is the hardest data to get for free and the most valuable for multi-hop analysis.** Companies are legally required to disclose material customer concentrations (>10% of revenue). Supplement with ImportYeti for import/export relationships. The confidence on LLM-extracted relationships should be lower than on structured data. Manual curation of the top 100-200 most important supply chain relationships is worth the effort for the POC |
 
+#### Edge Property Extraction Strategy
+
+When creating relationships from 10-K filings, **populate edge properties** to enable nuanced ripple analysis. See [02-graph-schema.md](02-graph-schema.md) § Edge Property Best Practices for the full schema.
+
+##### SUPPLIES_TO Edges
+
+Extract from 10-K sections:
+- **Item 1 (Business)** → "Principal Suppliers" or "Principal Customers"
+- **Item 1A (Risk Factors)** → "We depend on a single supplier…", "Our largest customer represents X% of revenue"
+- **Note 14/15 (Segment Reporting)** → Customer concentration disclosures
+
+LLM extraction prompt:
+```
+Extract supply chain relationships with these properties:
+- product_category: What does the supplier provide? (e.g., "EUV lithography machines")
+- dependency_level: "critical" if SEC filing uses terms like "sole source", "single supplier", 
+  "critical dependency", or "no alternative"; "important" if "significant supplier"; 
+  "optional" otherwise
+- is_sole_source: true if filing explicitly states "sole source" or "only supplier"
+- revenue_pct: If filing states "X% of our revenue from Customer Y", extract X
+- contract_value_usd: If annual contract value is disclosed, extract it
+- geographic_risk: Country where supplier is headquartered (for geopolitical risk)
+
+Source: 10-K accession number [accession], page [page]
+Confidence: 0.85 (LLM extraction from filing text)
+Last_confirmed: [filing date]
+```
+
+##### COMPETES_WITH Edges
+
+Extract from 10-K **Item 1 (Business) → Competition** section:
+
+LLM extraction prompt:
+```
+Extract competitive relationships with these properties:
+- market_segment: What market do they compete in? (e.g., "high-end data center GPUs")
+- intensity: "direct" if described as "primary competitor"; "partial" if competing 
+  in some segments but not others; "emerging" if described as "emerging threat"
+- market_share_a / market_share_b: If market shares are disclosed, extract them
+- differentiation: How do they compete? ("price", "performance", "ecosystem", "brand")
+- threat_level: "existential" if described as major threat, "significant" if serious 
+  competitor, "moderate" if mentioned among many
+
+Source: 10-K accession number [accession]
+Confidence: 0.75 (LLM extraction - competition sections are more subjective)
+Last_confirmed: [filing date]
+```
+
+##### HAS_EXECUTIVE / HAS_BOARD_MEMBER Edges
+
+Extract from **DEF 14A (Proxy Statement)**:
+
+- `compensation_usd`: From "Summary Compensation Table" (structured table - high confidence)
+- `stock_ownership_pct`: From "Beneficial Ownership" section
+- `is_independent`: From "Board of Directors" section (look for "independent" designation)
+- `committee`: From committee membership tables
+
+**Automation strategy**: DEF 14A has **tables** that can be parsed structurally (not LLM extraction). Use a table extraction library (e.g., `camelot-py`) for higher accuracy.
+
+##### Confidence Scoring by Source
+
+| Extraction Method | Base Confidence | Rationale |
+|-------------------|-----------------|-----------|
+| XBRL structured field | 0.95–1.0 | Machine-readable, authoritative |
+| SEC table extraction | 0.90–0.95 | Structured but OCR errors possible |
+| 10-K "Principal Suppliers" LLM extraction | 0.80–0.90 | Disclosed requirement, high signal |
+| 10-K "Risk Factors" LLM extraction | 0.70–0.85 | Narrative, some interpretation needed |
+| News article LLM extraction | 0.60–0.75 | Secondary source, less authoritative |
+| Wikipedia / public databases | 0.50–0.70 | Crowd-sourced, needs verification |
+| Manual seed data (Phase 0) | 0.90–1.0 | Hand-verified from SEC filings |
+
+**Corroboration boost**: If the same relationship appears in multiple sources (e.g., 10-K + news + ImportYeti), increase confidence by 0.05–0.10.
+
 ### Targets
 - **Company IR pages + press releases**: Daily scan for new releases. RSS feeds preferred (fast, low bandwidth). Fall back to HTML scraping of press release index pages
 - **Investor presentations**: Quarterly earnings presentations (PDFs), capital markets day decks, fact sheets. MarkItDown converts to Markdown for GraphRAG-SDK extraction

@@ -194,6 +194,47 @@ ripple_effect_agent = Agent(
     - 2+ years: multiply by 0.5 and flag as stale
     Combined confidence = base_confidence × hop_decay × staleness_multiplier
     
+    CRITICAL: Use edge properties for nuanced analysis. Edges carry rich metadata:
+    
+    SUPPLIES_TO edges have:
+    - `dependency_level`: \"critical\" | \"important\" | \"optional\" — prioritize critical
+    - `is_sole_source`: true/false — SOLE SOURCE disruptions are IMMEDIATE impact
+    - `product_category`: what exactly is supplied — include in your reasoning
+    - `contract_value_usd`: revenue at risk — quantify impact when possible
+    - `geographic_risk`: e.g., \"Taiwan\" — flag geopolitical exposure
+    - `alternative_suppliers`: number of alternatives — 0 = severe disruption risk
+    
+    COMPETES_WITH edges have:
+    - `intensity`: \"direct\" | \"partial\" | \"adjacent\" — direct competitors react immediately
+    - `market_segment`: what they compete on — competitor impact varies by segment
+    - `market_share_a/b`: market position — dominant player disruptions matter more
+    - `threat_level`: \"existential\" | \"significant\" | \"moderate\" — threat assessment
+    
+    HAS_EXECUTIVE / HAS_BOARD_MEMBER edges have:
+    - `is_independent`: independent directors are less conflicted than insiders
+    - `committee`: which board committees — \"Audit\" overlap = financial info sharing
+    - `stock_ownership_pct`: how much they own — incentive alignment
+    
+    Example reasoning WITH edge properties:
+    \"TSMC supplies Apple with A-series and M-series chips (5nm/3nm process). 
+    This is marked as `dependency_level: 'critical'` and `is_sole_source: true` 
+    in Apple's 10-K supply chain disclosures. The relationship has 
+    `geographic_risk: 'Taiwan'` and `alternative_suppliers: 0`. A TSMC fab 
+    disruption would IMMEDIATELY halt iPhone and Mac production with NO fallback 
+    option. Estimated `contract_value_usd: $200B+` annual revenue at risk. 
+    Confidence: 0.95 (confirmed in 2025-09-30 10-K, < 6 months old).\"
+    
+    Example reasoning WITHOUT edge properties (DO NOT DO THIS):
+    \"TSMC supplies Apple. A disruption would affect Apple.\" ← Too generic!
+    
+    When querying the graph, ALWAYS return edge properties in your Cypher queries:
+    ```cypher
+    MATCH (supplier)-[r:SUPPLIES_TO]->(customer)
+    RETURN supplier.ticker, customer.ticker,
+           r.product_category, r.dependency_level, r.is_sole_source,
+           r.confidence, r.last_confirmed
+    ```
+    
     Remember: your outputs are HYPOTHESES, not conclusions. Frame them accordingly.""",
     
     tools=[
