@@ -44,8 +44,11 @@ Validation   + Local LLM  MVP          Enrichment   System       Automate     Ex
 - [ ] `src/investment_researcher/agents/definitions/ripple_effect.py` — Ripple Effect Analyzer as a single OpenAI Agents SDK agent (Phase 4 adds Triage, Screener, etc. to the same `definitions/` directory)
 - [ ] `cli.py` — Typer CLI with `chat` command only (Phase 1 adds `health`, Phase 2 adds `ingest` — same file throughout)
 - [ ] Manual seed: ~50 companies with **known** supply chain relationships
-  - Source: public supply chain databases, 10-K filings
+  - Source: public supply chain databases, 10-K filings (hand-verified)
   - SUPPLIES_TO, COMPETES_WITH, OPERATES_IN relationships
+  - **Rich edge properties from day one**: product_category, dependency_level, is_sole_source, revenue_pct, market_segment, intensity, etc. (see [02-graph-schema.md](02-graph-schema.md))
+  - Example: `(:Company {ticker: "AAPL"})-[:SUPPLIES_TO {product_category: "A-series processors", dependency_level: "critical", is_sole_source: true, confidence: 0.95, source: "AAPL 10-K 2023, p.12"}]->(:Company {ticker: "TSMC"})`
+  - **Rationale**: Phase 0 tests whether graph-based analysis beats ChatGPT/Perplexity. Rich edge properties are what enable nuanced institutional-grade analysis ("TSMC is Apple's sole-source supplier for A-series chips") vs. generic LLM output ("TSMC supplies Apple")
 
 ### Validation Tests
 
@@ -66,13 +69,13 @@ Pick a past event (e.g., CHIPS Act passage, October 2022). Load pre-event data. 
 #### Test 2: Supply Chain Disruption
 Pick a known supply chain disruption (e.g., 2021 global chip shortage). Does multi-hop traversal surface non-obvious affected companies?
 
-- **Success**: Finds 2nd and 3rd-order impacts (e.g., auto manufacturers → car rental companies → insurance companies) that would require significant research effort to identify manually
+- **Success**: Finds 2nd and 3rd-order impacts (e.g., auto manufacturers → car rental companies → insurance companies) that would require significant research effort to identify manually. **Rich edge properties enable prioritization**: companies with `dependency_level: "critical"` and `is_sole_source: true` are flagged as highest-risk
 - **Failure**: Only finds obvious 1st-order impacts
 
 #### Test 3: Novel Connection Discovery
 Ask the system to find companies that would be affected by a hypothetical scenario (e.g., "What happens if Taiwan is blockaded?"). Compare output quality with and without the graph.
 
-- **Success**: Graph-based analysis produces connections and reasoning chains that are materially better than LLM-only analysis
+- **Success**: Graph-based analysis produces connections and reasoning chains that are materially better than LLM-only analysis. **Edge properties enable nuanced risk assessment**: "TSMC is NVIDIA's sole-source supplier (`is_sole_source: true`) for H100 GPUs (`product_category: "AI accelerators"`), representing 40% of NVIDIA's revenue (`revenue_pct: 0.40`)" vs. generic "TSMC supplies NVIDIA"
 - **Failure**: No meaningful quality difference
 
 ### Go / No-Go Decision
@@ -105,7 +108,7 @@ investment-researcher/
 ├── cli.py                        ✓  (Typer, chat command — Phase 1 adds health, Phase 2 adds ingest)
 ├── data/
 │   ├── falkordb/                 ✓  (bind mount target — consistent with Phase 1+)
-│   └── seed/                     ✓  (50 companies, supply chain relationships)
+│   └── seed/                     ✓  (50 companies, supply chain relationships with rich edge properties: product_category, dependency_level, is_sole_source, market_segment, intensity, etc.)
 └── docs/poc-results.md           ✓  (test results + go/no-go decision)
 ```
 
