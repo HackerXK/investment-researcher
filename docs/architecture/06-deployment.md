@@ -126,7 +126,7 @@ services:
 ```bash
 # .env file (not committed to git)
 
-# ─── OpenAI (POC) ──────────────────────────────────────
+# ─── OpenAI (primary LLM provider) ─────────────────────
 OPENAI_API_KEY=sk-...
 
 # ─── FalkorDB ──────────────────────────────────────────

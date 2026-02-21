@@ -2,9 +2,11 @@
 
 ## Executive Summary
 
-This document evaluates the strategic viability of building a self-hosted, graph-based, multi-agent investment research platform. It covers the competitive landscape, where the system can realistically provide an edge, where it cannot, key risks, and a recommended validation approach before committing to the full build.
+This document evaluates the strategic viability of building a self-hosted, graph-based, multi-agent investment research platform. It covers the competitive landscape, where the system can realistically provide an edge, where it cannot, key risks, and the data-first development approach that drives the phased roadmap.
 
 **Bottom line**: The concept is sound. Multi-hop relationship traversal across companies, political actors, institutions, and macro indicators is the kind of analysis that institutional investors do routinely — and retail investors almost never do. Nobody has productized this combination as a self-hosted tool. The goal is not to *beat* institutions, but to **close the gap** — to see the same opportunities and trends that institutional investors see, at roughly the same time, rather than weeks or months later when it's already priced in.
+
+> **Core principle — data quality first**: The project's success hinges entirely on the quality of the data and our ability to extract, structure, and store it. A graph with poor data produces poor analysis regardless of how sophisticated the agents are. There is nothing to "validate" with toy data — the concept of graph-based multi-hop analysis is obviously superior to flat-table research tools. The hard problem is **building the data extraction pipeline that populates the graph with rich, accurate, well-sourced information from SEC filings and other authoritative sources**. That is where early development effort must focus.
 
 ---
 
@@ -53,7 +55,7 @@ Before building anything, acknowledge what existing tools already provide for ~$
 
 **The delta this platform must deliver**: The baseline tools provide *flat* views of individual data domains. This platform's value is in **cross-domain connection discovery** — linking a Congressional trade to committee oversight to pending legislation to supply chain exposure to institutional positioning, in a single traversal. This is the kind of analysis institutional investors do with teams of analysts and proprietary systems. If the graph doesn't consistently surface connections that cross two or more of these domains — bringing you closer to the institutional level of analysis — the platform doesn't justify its cost.
 
-**Phase 0 must explicitly test against this baseline.** Run the same research questions through ChatGPT/Perplexity and compare output quality side-by-side.
+**The path to this delta is data quality, not concept validation.** You don't need to "prove" that a rich knowledge graph beats ChatGPT — that's self-evident when the graph contains structured, sourced, interconnected data that no LLM has in its context window. The challenge is *extracting* that data reliably from SEC filings, financial APIs, and other sources. Early development effort must focus on building robust data extraction pipelines that pull real data from real sources.
 
 ---
 
@@ -235,7 +237,7 @@ Apple, Microsoft, and NVIDIA are covered by hundreds of analysts. The probabilit
 
 | Risk | Severity | Likelihood | Mitigation |
 |------|----------|------------|------------|
-| **Over-engineering before validating** | High | High | Build a minimal proof-of-concept first (see Phase 0 below). Validate that the graph produces novel insights before the full build |
+| **Building agents before data quality** | High | High | Agents are only as good as the data they query. Build robust SEC filing extraction and data pipelines before investing in multi-agent orchestration |
 | **Graph noise overwhelms signal** | High | Medium | Too many auto-detected relationships create false patterns. The graph finds "connections" between everything — most are meaningless. Implement confidence thresholds and require multi-source corroboration |
 | **Confirmation bias amplification** | High | Medium | The system will find evidence for any thesis if you look hard enough. Agents need explicit instructions to seek *disconfirming* evidence. Include a "bear case" section in every report |
 | **Cost vs. return** | Medium | Medium | ~$4K already invested (workstation), ~$3K–$9K for NAS (Phase 5), ~$8K–20K for Mac Studios (Phase 6+ if needed) + hundreds of hours of development. Need meaningful portfolio returns to justify. Track ROI explicitly |
@@ -245,57 +247,49 @@ Apple, Microsoft, and NVIDIA are covered by hundreds of analysts. The probabilit
 
 ---
 
-## Recommended Validation Approach — Phase 0
+## Development Philosophy — Data Quality First
 
-### Before committing to the full architecture, build a minimal proof-of-concept:
+### Why "Validate the Idea" Is a Trap
 
-**Scope**: ~50 companies in one sector (semiconductors + their supply chain) with OpenAI API (not local LLMs).
+The original plan called for a Phase 0 proof-of-concept: hand-seed ~50 companies, build a single agent, and test whether graph-based analysis beats ChatGPT. This sounds reasonable but is actually a pitfall:
 
-**Duration**: 1–2 weeks
+1. **Hand-crafted data teaches you nothing.** With manually entered toy data, you're testing whether an LLM can narrate a pre-built graph — not whether the platform can extract institutional-grade research from real sources. The entire value proposition depends on automated extraction from SEC filings, not on human data entry.
 
-**What to build**:
-- FalkorDB with the core schema (Company, Industry, Filing, NewsArticle)
-- Manual seeding of ~50 companies with known supply chain relationships
-- 2–3 agent tools (query_graph, get_company_profile, get_related_companies)
-- Ripple Effect Analyzer agent only
-- CLI chat interface
+2. **The concept doesn't need validation.** Graph-based multi-hop analysis is *obviously* superior to flat-table research tools when the graph contains rich, structured, well-sourced data. Kensho was acquired for $550M doing exactly this. Palantir, Two Sigma, and Citadel all use knowledge graphs. The concept is proven. What's unproven is whether a solo developer can build a data pipeline good enough to populate the graph with quality data.
 
-**What to test**:
+3. **The hard problem is data extraction, not graph traversal.** FalkorDB can traverse millions of relationships in milliseconds. OpenAI Agents SDK can orchestrate multi-agent reasoning. These are solved problems. The unsolved problem — and the one that determines whether the project succeeds — is extracting structured, accurate, well-sourced information from SEC filings (10-K, 10-Q, 8-K, DEF 14A), financial APIs, and news sources.
 
-#### Test 0: Null Hypothesis — No Graph Needed?
-Run the **same** research questions through ChatGPT Pro / Perplexity Pro / Deep Research with no graph and no custom system. Compare output quality side-by-side.
+### What Early Phases Should Focus On
 
-- **Success criteria (for the platform)**: The graph-based analysis surfaces specific connections, tickers, or reasoning chains that the LLM-only approach misses or gets wrong. The graph output is measurably more specific, more actionable, and more accurate
-- **Failure mode**: The LLM-only approach produces substantially similar insights. The graph adds specificity but not enough to justify the infrastructure
+Instead of validating the idea with toy data, early development effort should focus on:
 
-> This is the most important test. If ChatGPT with web search produces 80% of the same output, the remaining 20% needs to be extraordinarily valuable to justify the build.
+1. **SEC filing extraction**: Build robust pipelines that extract entities, relationships, financial metrics, supply chain disclosures, competitive dynamics, executive information, and risk factors from 10-K filings. This is the hardest and most valuable data source.
 
-#### Test 1: Historical Event Replay
-Pick a past event (e.g., CHIPS Act passage, October 2022). Load pre-event data. Does the system correctly predict which companies benefit?
+2. **Data quality over breadth**: It's better to have 50 companies with deeply extracted, richly structured data (every supply chain relationship with product_category, dependency_level, is_sole_source; every financial metric with accession number provenance) than 5,000 companies with shallow data.
 
-- **Success criteria**: The system identifies beneficiaries that actually outperformed (Intel, TSMC, Applied Materials) and the reasoning chain is sound
-- **Failure mode**: The system produces generic analysis no better than asking ChatGPT directly
+3. **Rich edge properties from day one**: Every relationship stored in the graph should carry metadata that enables nuanced analysis: "TSMC is Apple's sole-source supplier for A-series processors, disclosed in AAPL 10-K 2024, p.12" — not just "TSMC supplies Apple."
 
-#### Test 2: Supply Chain Disruption
-Pick a known supply chain disruption (e.g., 2021 global chip shortage). Does multi-hop traversal surface non-obvious affected companies?
+4. **Provenance and sourcing**: Every piece of data in the graph should trace back to a source document. This is what separates institutional-grade data from LLM-generated summaries.
 
-- **Success criteria**: The system finds 2nd and 3rd-order impacts (e.g., auto manufacturers → car rental companies → insurance companies) that would require significant research effort to identify manually
-- **Failure mode**: The system only finds obvious 1st-order impacts
+### When the Platform Proves Itself
 
-#### Test 3: Political Signal (if Congressional data is seeded)
-Pick a Congressional trade that preceded a stock move. Does the graph connect the dots?
+The platform doesn't prove itself through a contrived validation test. It proves itself **incrementally, as data quality improves**:
 
-- **Success criteria**: The system links the trade to committee oversight, pending legislation, and affected companies — producing a thesis that would have been valuable before the stock moved
-- **Failure mode**: The trade-stock connection is obvious without the graph
+- **After SEC pipeline is running**: Query the graph about Apple's supply chain and get back specific suppliers with product categories, dependency levels, sole-source flags, and 10-K page citations. ChatGPT cannot do this with this level of specificity and sourcing.
+- **After financial metrics are flowing**: Ask about companies with declining margins and increasing R&D spend in the semiconductor sector, cross-referenced with supply chain dependencies. The answer comes from structured data, not LLM reasoning over web results.
+- **After news pipeline is running**: A filing drops at 2 AM, the system extracts entities, links them to the graph, and surfaces affected companies by morning. No "validation test" needed — the value is self-evident.
 
 ### Decision Framework
 
-| Test Results | Recommendation |
-|-------------|----------------|
-| **Test 0 fails** (LLM-only matches graph quality) | ❌ **Kill the project**. Use ChatGPT/Perplexity + existing tools. Save the development time — the workstation is already purchased and useful regardless |
-| Test 0 passes + 3/3 others produce novel insights | ✅ **Proceed** with full architecture build |
-| Test 0 passes + 2/3 others produce novel insights | ✅ **Proceed**, but deprioritize the failing test's data domain |
-| Test 0 passes + 1/3 or 0/3 | ⚠️ **Reconsider** — the graph adds some value but may not justify the full infrastructure cost. Consider a lighter approach |
+The go/no-go decision is not "does the graph beat ChatGPT with toy data?" It's:
+
+| Milestone | Assessment |
+|-----------|------------|
+| SEC pipeline extracts entities and relationships from 10-K filings with >80% accuracy | ✅ Core data extraction works — continue building |
+| Extracted data is richer and more specific than what ChatGPT produces from the same filing | ✅ Data quality justifies the effort — the graph will be valuable |
+| After 100 companies with real SEC-extracted data, multi-hop queries surface non-obvious connections | ✅ The graph structure adds value beyond flat data — expand coverage |
+| SEC extraction accuracy is <60% after reasonable tuning effort | ⚠️ Reconsider approach — try different extraction methods or reduce scope |
+| After 6 months, maintenance burden exceeds value of insights produced | ❌ Simplify or shut down |
 
 ---
 

@@ -1,91 +1,108 @@
 # Implementation Roadmap — Phased Delivery
 
-> **Prerequisite**: Before committing to the full build, complete Phase 0 (Proof-of-Concept Validation). See [00-strategic-rationale.md](00-strategic-rationale.md) for the full strategic analysis behind this approach.
+> **Core principle — data quality first**: The project's success hinges on the quality of the data and our ability to extract, structure, and store it. Early phases focus on SEC filing extraction and data pipeline quality, not on validating whether the graph concept works (it obviously does when populated with quality data). See [00-strategic-rationale.md](00-strategic-rationale.md) for the full strategic analysis.
 
 ## Phase Overview
 
 ```
 Phase 0 ──── Phase 1 ──── Phase 2 ──── Phase 3 ──── Phase 4 ──── Phase 5 ──── Phase 6 ──── Phase 7 ──── Phase 8
-POC          Foundation   Ingestion    Relationship Agent        Scale &      Mac Studio  Feedback    Web UI
-Validation   + Local LLM  MVP          Enrichment   System       Automate     Expansion   Loop
-(Week 1-2)   (Week 3-4)   (Week 5-6)   (Week 7-9)   (Week 10-12) (Week 13-15) (Week 16+)  (Week 18+)  (Future)
+Data         SEC Filing   Financial    Relationship Agent        Scale &      Mac Studio  Feedback    Web UI
+Foundation   Extraction   Data         Enrichment   System       Automate     Expansion   Loop
+(Week 1-3)   (Week 4-6)   (Week 7-8)   (Week 9-11)  (Week 12-14) (Week 15-17) (Week 18+)  (Week 20+)  (Future)
 │            │                                       │                        │
-├─ Test 0: Null hypothesis (beat ChatGPT/Perplexity?)│                        │
-├─ Test 1-3: Historical replay, supply chain, novel  │                        │
+├─ FalkorDB + schema + CLI                           │                        │
+├─ SEC EDGAR pipeline (10-K, 10-Q, 8-K, DEF 14A)    │                        │
 │            RTX 5090 local LLM available ────────────┘                        │
 │            (Qwen 32B, Llama 8B on workstation)      Monetization begins ─────┤
 └─ Mac Studio purchase gate ───────────────────────────────────────────────────┘
 ```
 
-> **Infrastructure**: AMD Workstation (RTX 5090 32GB, Ryzen 9 9950X3D, 64GB DDR5) is the Docker host, GPU inference machine, and primary storage (6TB NVMe: 2TB P41 + 4TB SN5000 RAID 0) — **already purchased**. MacBook Pro M2 Pro is the dev terminal only. No NAS needed until Phase 5 (NVMe total hits 70% capacity ~4.2TB). Mac Studio cluster is deferred to Phase 6+, gated on validation. See [08-hardware-requirements.md](08-hardware-requirements.md).
+> **Infrastructure**: AMD Workstation (RTX 5090 32GB, Ryzen 9 9950X3D, 64GB DDR5) is the Docker host, GPU inference machine, and primary storage (6TB NVMe: 2TB P41 + 4TB SN5000 RAID 0) — **already purchased**. MacBook Pro M2 Pro is the dev terminal only. No NAS needed until Phase 5 (NVMe total hits 70% capacity ~4.2TB). Mac Studio cluster is deferred to Phase 6+, gated on data pipeline maturity. See [08-hardware-requirements.md](08-hardware-requirements.md).
 
-> **Build philosophy**: Every phase extends the previous one — no throwaway code. Phase 0 establishes the final package structure, CLI framework, and agent framework. Subsequent phases add to that foundation rather than replace it. The POC constraint is *scope* (50 companies, 1 agent, no ingestion pipelines), not code quality or structure.
+> **Build philosophy**: Every phase extends the previous one — no throwaway code. Phase 0 establishes the final package structure, CLI framework, and graph schema. Subsequent phases add to that foundation rather than replace it. The Phase 0 constraint is *scope* (50 semiconductor companies via SEC extraction), not code quality or structure. Development effort is front-loaded on data extraction quality.
 
 ---
 
-## Phase 0: Proof-of-Concept Validation (Week 1-2)
+## Phase 0: Data Foundation (Week 1-3)
 
-**Goal**: Validate that a graph-based approach produces analysis comparable to what institutional investors do — and meaningfully better than what's available through existing retail tools (ChatGPT, Perplexity, Quiver). See [00-strategic-rationale.md](00-strategic-rationale.md) for full strategic context.
+**Goal**: Establish the project's permanent structure, graph schema, CLI framework, and SEC EDGAR data extraction pipeline. All data comes from real sources (SEC filings, XBRL) — no hand-seeded toy data. See [00-strategic-rationale.md](00-strategic-rationale.md) § Data Quality First.
 
 ### Scope
 - ~50 companies in the **semiconductor** sector + their supply chain
-- OpenAI API primary; optionally test local LLM on RTX 5090 (Qwen 2.5 32B) for comparison
-- Minimal infrastructure (FalkorDB + single agent on AMD workstation)
+- **SEC EDGAR pipeline**: Fetch and parse 10-K filings for target companies
+- **Entity and relationship extraction**: LLM-based extraction from filing text → rich graph nodes and edges
+- **XBRL financial data**: Structured extraction of revenue, net income, EPS from filing XBRL
+- OpenAI API primary; optionally test local LLM on RTX 5090 (Qwen 2.5 32B) for extraction quality comparison
+- Minimal infrastructure (FalkorDB + CLI on AMD workstation)
 - **Full production structure from day one** — scope is narrow, but code is in its final home
 
 ### Tasks
+
+#### Infrastructure & Project Structure
 - [ ] `docker-compose.yml` with FalkorDB only (bind mount `./data/falkordb:/data` — same file Phase 1 extends by adding Langfuse)
 - [ ] `pyproject.toml` with `investment_researcher` package, Typer, OpenAI Agents SDK, FalkorDB client — Phase 1 adds more deps, never restructures
 - [ ] `.env.example` (OpenAI key only for now — Phase 1 adds Langfuse, Phase 2 adds data API keys)
 - [ ] `src/investment_researcher/config.py` — env var loading (Phase 1 expands, never replaces)
 - [ ] `src/investment_researcher/graph/connection.py` — FalkorDB connection + health check (Phase 1 adds retry logic)
 - [ ] `src/investment_researcher/graph/schema.py` — core ontology: Company, Industry, Filing, NewsArticle (Phase 1 adds full schema + indexes)
+- [ ] `cli.py` — Typer CLI with `chat` and `ingest` commands (Phase 1 adds `health` — same file throughout)
+
+#### SEC EDGAR Pipeline (Core Development Focus)
+- [ ] Company CIK/ticker lookup from EDGAR company index
+- [ ] Filing fetcher: 10-K, 10-Q, 8-K for target companies (~50 initially)
+  - EDGAR SEC-API or direct EDGAR FULL-TEXT search
+  - Rate-limited, polite scraping (10 req/sec max)
+  - Store raw filing HTML/XML in `data/raw/filings/`
+- [ ] Filing preprocessor: HTML → clean markdown (MarkItDown or custom parser)
+- [ ] **LLM-based entity extraction from 10-K text** (the hardest and most valuable task):
+  - [ ] Supply chain extraction from "Customers" / "Suppliers" / "Risk Factors" sections
+    - Extract: supplier/customer identity, product_category, dependency_level, is_sole_source
+    - Source citation: accession number + section + page
+  - [ ] Competitive dynamics from "Competition" section
+    - Extract: competitor identity, market_segment, intensity, differentiation
+  - [ ] Executive/board extraction from filing headers and DEF 14A
+  - [ ] Industry/sector classification
+  - [ ] Risk factor categorization (geopolitical, regulatory, supply chain, financial)
+- [ ] XBRL parser for structured financial data (revenue, net income, EPS, etc.)
+  - Write parsed metrics to Filing nodes and Company snapshot properties
+- [ ] Filing → FalkorDB loader: create Filing nodes, link to Company, populate edge properties
+- [ ] Ingestion state tracking (SQLite) — track which filings have been fetched/parsed/loaded
+- [ ] CLI commands: `ingest edgar --ticker AAPL`, `ingest edgar --list top50`
+
+#### Agent Tools & Basic Agent (For Interactive Querying)
 - [ ] `src/investment_researcher/agents/tools/graph_tools.py` — `query_graph`, `get_company_profile`, `get_related_companies` using OpenAI Agents SDK `@function_tool` (Phase 4 adds more tools to this same file)
-- [ ] `src/investment_researcher/agents/definitions/ripple_effect.py` — Ripple Effect Analyzer as a single OpenAI Agents SDK agent (Phase 4 adds Triage, Screener, etc. to the same `definitions/` directory)
-- [ ] `cli.py` — Typer CLI with `chat` command only (Phase 1 adds `health`, Phase 2 adds `ingest` — same file throughout)
-- [ ] Manual seed: ~50 companies with **known** supply chain relationships
-  - Source: public supply chain databases, 10-K filings (hand-verified)
-  - SUPPLIES_TO, COMPETES_WITH, OPERATES_IN relationships
-  - **Rich edge properties from day one**: product_category, dependency_level, is_sole_source, revenue_pct, market_segment, intensity, etc. (see [02-graph-schema.md](02-graph-schema.md))
-  - Example: `(:Company {ticker: "AAPL"})-[:SUPPLIES_TO {product_category: "A-series processors", dependency_level: "critical", is_sole_source: true, confidence: 0.95, source: "AAPL 10-K 2023, p.12"}]->(:Company {ticker: "TSMC"})`
-  - **Rationale**: Phase 0 tests whether graph-based analysis beats ChatGPT/Perplexity. Rich edge properties are what enable nuanced institutional-grade analysis ("TSMC is Apple's sole-source supplier for A-series chips") vs. generic LLM output ("TSMC supplies Apple")
+- [ ] `src/investment_researcher/agents/definitions/ripple_effect.py` — Ripple Effect Analyzer as a single OpenAI Agents SDK agent (Phase 4 adds Triage, Screener, etc.)
+- [ ] `chat` command routes to Ripple Effect Analyzer for interactive graph exploration
 
-### Validation Tests
+### Validation Criteria
 
-#### Test 0: Null Hypothesis — No Graph Needed?
-Run the **same** research questions (Tests 1–3) through ChatGPT Pro / Perplexity Pro / Deep Research with no graph. Compare output quality side-by-side.
+> **Note**: These are data quality milestones, not concept validation tests. The platform proves itself through data quality, not contrived comparisons with ChatGPT.
 
-- **Success**: The graph-based analysis surfaces specific connections, tickers, or reasoning chains that the LLM-only approach misses or gets wrong
-- **Failure**: The LLM-only approach produces substantially similar insights
+#### Data Extraction Quality
+- [ ] `ingest edgar --ticker AAPL` fetches 10-K filing, extracts entities/relationships, and loads into FalkorDB
+- [ ] Extracted SUPPLIES_TO relationships have rich edge properties: product_category, dependency_level, is_sole_source, source (with accession number)
+- [ ] XBRL parser populates Company nodes with financial metrics: revenue_ttm, net_income, eps
+- [ ] Spot-check: compare LLM-extracted supply chain data against manually reading the same 10-K section — extraction should capture the key relationships disclosed in the filing
+- [ ] At least 10 companies with SEC-extracted data in the graph
 
-> This is the most important test. If ChatGPT with web search produces 80% of the same output, kill the project.
+#### Graph Quality
+- [ ] `MATCH ()-[r:SUPPLIES_TO]->() RETURN count(r)` shows meaningful count (50+ from SEC extraction)
+- [ ] Rich edge properties populated: `MATCH ()-[r:SUPPLIES_TO]->() WHERE r.product_category IS NOT NULL RETURN count(r)` > 50
+- [ ] Filing nodes linked to companies: `MATCH (c:Company)-[:FILED]->(f:Filing) RETURN count(f)` > 10
 
-#### Test 1: Historical Event Replay
-Pick a past event (e.g., CHIPS Act passage, October 2022). Load pre-event data. Does the system correctly predict which companies benefit?
+#### Interactive Exploration
+- [ ] `python cli.py chat "Who supplies Apple?"` returns data with source citations
+- [ ] `python cli.py chat "What companies are affected if TSMC has a production disruption?"` returns multi-hop analysis using rich edge properties
+- [ ] Graph in FalkorDB browser (localhost:3000) shows interconnected network
 
-- **Success**: Identifies beneficiaries that actually outperformed (Intel, TSMC, Applied Materials) with sound reasoning chains
-- **Failure**: Produces generic analysis no better than asking ChatGPT directly
+### Decision Framework
 
-#### Test 2: Supply Chain Disruption
-Pick a known supply chain disruption (e.g., 2021 global chip shortage). Does multi-hop traversal surface non-obvious affected companies?
-
-- **Success**: Finds 2nd and 3rd-order impacts (e.g., auto manufacturers → car rental companies → insurance companies) that would require significant research effort to identify manually. **Rich edge properties enable prioritization**: companies with `dependency_level: "critical"` and `is_sole_source: true` are flagged as highest-risk
-- **Failure**: Only finds obvious 1st-order impacts
-
-#### Test 3: Novel Connection Discovery
-Ask the system to find companies that would be affected by a hypothetical scenario (e.g., "What happens if Taiwan is blockaded?"). Compare output quality with and without the graph.
-
-- **Success**: Graph-based analysis produces connections and reasoning chains that are materially better than LLM-only analysis. **Edge properties enable nuanced risk assessment**: "TSMC is NVIDIA's sole-source supplier (`is_sole_source: true`) for H100 GPUs (`product_category: "AI accelerators"`), representing 40% of NVIDIA's revenue (`revenue_pct: 0.40`)" vs. generic "TSMC supplies NVIDIA"
-- **Failure**: No meaningful quality difference
-
-### Go / No-Go Decision
-
-| Test Results | Decision |
-|-------------|----------|
-| **Test 0 fails** (LLM-only matches graph quality) | ❌ **Kill the project**. Use ChatGPT/Perplexity + existing tools. Save thousands of dollars and hundreds of hours |
-| Test 0 passes + 3/3 others produce genuinely novel insights | ✅ **Proceed** with full architecture build (Phase 1+) |
-| Test 0 passes + 2/3 others produce novel insights | ✅ **Proceed**, but deprioritize the failing test's data domain |
-| Test 0 passes + 1/3 or 0/3 | ⚠️ **Reconsider** — the graph adds some value but may not justify the full infrastructure cost |
+| Milestone | Assessment |
+|-----------|------------|
+| SEC pipeline extracts entities and relationships from 10-K filings with >80% accuracy | ✅ Core data extraction works — continue building |
+| Extracted relationships include rich edge properties (product_category, dependency_level, source citations) | ✅ Pipeline is producing institutional-grade data — expand coverage |
+| SEC extraction accuracy is <60% after reasonable tuning effort | ⚠️ Try different extraction methods (structured parsing, better prompts, different models) before giving up |
+| After 50 companies with SEC-extracted data, multi-hop queries surface non-obvious cross-company connections | ✅ The pipeline + graph approach is working — proceed to Phase 1 |
 
 ### Deliverables
 ```
@@ -100,28 +117,36 @@ investment-researcher/
 │       ├── graph/
 │       │   ├── connection.py     ✓  (FalkorDB connection + health check)
 │       │   └── schema.py         ✓  (Company, Industry, Filing, NewsArticle + indexes)
+│       ├── ingestion/
+│       │   ├── edgar/
+│       │   │   ├── fetcher.py    ✓  (EDGAR filing fetcher — 10-K, 10-Q, 8-K download)
+│       │   │   ├── parser.py     ✓  (HTML → markdown, section splitting)
+│       │   │   ├── xbrl.py       ✓  (XBRL financial data extraction)
+│       │   │   └── extractor.py  ✓  (LLM-based entity/relationship extraction from filing text)
+│       │   ├── loader.py         ✓  (Filing → FalkorDB node/edge writer)
+│       │   └── state.py          ✓  (SQLite ingestion state tracker)
 │       └── agents/
 │           ├── tools/
 │           │   └── graph_tools.py ✓ (query_graph, get_company_profile, get_related_companies — Phase 4 adds to this file)
 │           └── definitions/
 │               └── ripple_effect.py ✓ (single OpenAI Agents SDK agent — Phase 4 adds more agents here)
-├── cli.py                        ✓  (Typer, chat command — Phase 1 adds health, Phase 2 adds ingest)
+├── cli.py                        ✓  (Typer: chat, ingest edgar — Phase 1 adds health)
 ├── data/
 │   ├── falkordb/                 ✓  (bind mount target — consistent with Phase 1+)
-│   └── seed/                     ✓  (50 companies, supply chain relationships with rich edge properties: product_category, dependency_level, is_sole_source, market_segment, intensity, etc.)
-└── docs/poc-results.md           ✓  (test results + go/no-go decision)
+│   └── raw/filings/              ✓  (downloaded SEC filings — HTML/XML)
+└── docs/data-quality-report.md   ✓  (SEC extraction accuracy, spot-check results)
 ```
 
 ### Cost Estimate
 - **Hardware**: AMD workstation already purchased (~$3,764) — runs all Docker services + GPU inference
-- **API costs**: ~$20–$50 in OpenAI API calls for seeding + testing (or $0 if using local LLM on RTX 5090)
-- **Time**: 1–2 weeks
+- **API costs**: ~$50–$150 in OpenAI API calls for SEC filing extraction (LLM-based entity extraction from 10-K text is the main cost driver). Or significantly less if using local LLM on RTX 5090
+- **Time**: 2–3 weeks (infrastructure: 1 week, SEC pipeline: 1–2 weeks)
 
 ---
 
-## Phase 1: Foundation (Week 3-4)
+## Phase 1: Foundation (Week 4-5)
 
-**Goal**: Expand Phase 0 foundation — add observability, GraphRAG-SDK, manual upload, and optional local LLM. All additions extend Phase 0 files; nothing is replaced.
+**Goal**: Expand Phase 0 foundation — add observability, GraphRAG-SDK, manual upload, and optional local LLM. Improve SEC EDGAR pipeline based on Phase 0 extraction quality results. All additions extend Phase 0 files; nothing is replaced.
 
 ### Tasks
 - [ ] Expand `docker-compose.yml` — add Langfuse + Postgres services (FalkorDB section unchanged)
@@ -176,9 +201,9 @@ cli.py                        ← Phase 0 (expanded: health command added)
 
 ---
 
-## Phase 2: Data Ingestion MVP (Week 5-6)
+## Phase 2: Data Ingestion MVP (Week 6-8)
 
-**Goal**: SEC EDGAR and financial data pipelines running. ~100 companies in the graph with filings and financial metrics.
+**Goal**: Scale SEC EDGAR pipeline from Phase 0's initial 50 companies to ~100. Add DuckDB time series store, financial data API pipelines, and macro indicators. The SEC EDGAR pipeline (fetcher, parser, XBRL, extractor) already exists from Phase 0 — this phase is about scaling it and adding complementary data sources.
 
 ### Tasks
 - [ ] **DuckDB time series store setup**:
@@ -187,12 +212,14 @@ cli.py                        ← Phase 0 (expanded: health command added)
   - [ ] `macro_timeseries` table (FRED/WorldBank/BLS indicators)
   - [ ] Snapshot recompute logic: DuckDB window functions → FalkorDB Company node properties
   - [ ] `get_financial_history` tool with `lru_cache` (growth rates computed at query time)
-- [ ] SEC EDGAR pipeline:
-  - [ ] Company CIK/ticker lookup from EDGAR company index
-  - [ ] Filing fetcher (10-K, 10-Q, 8-K for tracked companies)
-  - [ ] MarkItDown conversion for filing HTML
-  - [ ] GraphRAG-SDK entity extraction from filings
-  - [ ] XBRL parser for structured financial data
+- [ ] SEC EDGAR pipeline — **scale from Phase 0**:
+  - [ ] ~~Company CIK/ticker lookup from EDGAR company index~~ ✅ Phase 0
+  - [ ] ~~Filing fetcher (10-K, 10-Q, 8-K for tracked companies)~~ ✅ Phase 0
+  - [ ] ~~MarkItDown conversion for filing HTML~~ ✅ Phase 0
+  - [ ] Scale extraction to S&P 100 companies
+  - [ ] Improve extraction prompts based on Phase 0 accuracy results
+  - [ ] GraphRAG-SDK entity extraction from filings (augment LLM-based extraction from Phase 0)
+  - [ ] ~~XBRL parser for structured financial data~~ ✅ Phase 0
   - [ ] Write financial metrics → DuckDB (`financial_metrics` table, `accession` column for provenance); recompute snapshot → FalkorDB Company node properties
 - [ ] Financial data pipeline:
   - [ ] FMP or Polygon.io integration
@@ -204,7 +231,7 @@ cli.py                        ← Phase 0 (expanded: health command added)
 - [ ] Entity resolution: ticker/CIK-based dedup
 - [ ] Ingestion state tracking (SQLite)
 - [ ] CLI commands: `ingest edgar`, `ingest financials`, `ingest macro`, `ingest countries`
-- [ ] Seed list: Top 100 S&P 500 companies by market cap + G20 countries
+- [ ] Target list: Top 100 S&P 500 companies by market cap + G20 countries
 
 > **Note**: Starter macro set here (5–10 key indicators). Full FRED indicator suite expands in Phase 3 per [03-data-ingestion.md](03-data-ingestion.md) build order.
 
@@ -212,7 +239,7 @@ cli.py                        ← Phase 0 (expanded: health command added)
 - `python cli.py ingest edgar --companies top100` completes successfully
 - FalkorDB shows ~100 Company nodes with Filing relationships and snapshot metrics
 - Company nodes have `revenue_ttm`, `pe_ratio`, `revenue_growth_yoy` populated
-- DuckDB `financial_metrics` table has 20+ quarters of data for seeded companies
+- DuckDB `financial_metrics` table has 20+ quarters of data for tracked companies
 - `SELECT COUNT(*) FROM financial_metrics` → meaningful count (thousands of rows)
 - MacroIndicator nodes show current Fed Funds Rate, CPI, GDP, etc.
 - DuckDB `macro_timeseries` table has historical FRED data
@@ -648,14 +675,14 @@ src/investment_researcher/
 
 | Phase | Duration | Key Milestone |
 |-------|----------|---------------|
-| 0. POC Validation | Week 1-2 | Null hypothesis test + go/no-go: does the graph beat ChatGPT/Perplexity? |
-| 1. Foundation + Local LLM | Week 3-4 | Docker on AMD workstation, graph + CLI working. Optional: RTX 5090 local inference (Qwen 32B) |
-| 2. Ingestion MVP | Week 5-6 | 100 companies + G20 countries with filings + financials in graph |
-| 3. Relationships | Week 7-9 | Supply chain, executives, news, Congressional trades, IR pages/press releases (Tier 1). 13F + legislation deferred to Phase 5 |
-| 4. Agent System | Week 10-12 | Multi-agent ripple analysis, reports (bear cases + source citations), paper trading begins. **Monetization starts**: newsletter, LLM API, open source |
-| 5. Scale & Automate | Week 13-15 | 5,000+ companies, Tier 2 pipelines (13F, legislation, gov contracts), 24/7 autonomous on workstation |
-| 6. Mac Studio Expansion | Week 16+ | 405B models for complex reasoning. **Mac Studio purchase gate**: only buy after Phase 5 validates + RTX 5090 proven insufficient |
-| 7. Feedback Loop | Week 18+ | Prediction tracking, confidence calibration, historical backtesting, signal vs. noise |
+| 0. Data Foundation | Week 1-3 | Graph schema, SEC EDGAR extraction pipeline, XBRL financials. Data quality is the validation |
+| 1. Foundation + Local LLM | Week 4-5 | Docker on AMD workstation, observability, GraphRAG-SDK, improved extraction. Optional: RTX 5090 local inference (Qwen 32B) |
+| 2. Ingestion MVP | Week 6-8 | Scale to 100 companies + G20 countries. DuckDB time series, financial data APIs, macro indicators |
+| 3. Relationships | Week 9-11 | Supply chain, executives, news, Congressional trades, IR pages/press releases (Tier 1). 13F + legislation deferred to Phase 5 |
+| 4. Agent System | Week 12-14 | Multi-agent ripple analysis, reports (bear cases + source citations), paper trading begins. **Monetization starts**: newsletter, LLM API, open source |
+| 5. Scale & Automate | Week 15-17 | 5,000+ companies, Tier 2 pipelines (13F, legislation, gov contracts), 24/7 autonomous on workstation |
+| 6. Mac Studio Expansion | Week 18+ | 405B models for complex reasoning. **Mac Studio purchase gate**: only buy after Phase 5 validates + RTX 5090 proven insufficient |
+| 7. Feedback Loop | Week 20+ | Prediction tracking, confidence calibration, historical backtesting, signal vs. noise |
 | 8. Web UI | Future | Browser dashboard for reports + graph exploration |
 
 ### Budget Summary
@@ -674,8 +701,8 @@ src/investment_researcher/
 
 | Risk | Impact | Likelihood | Mitigation |
 |------|--------|------------|------------|
-| **Phase 0 fails — graph doesn't add value** | Critical | Low-Medium | Kill the project early. Better to lose 2 weeks than 6 months. Pivot to simpler LLM-based research tool |
-| **Over-engineering before validating** | High | High | Phase 0 exists specifically to prevent this. Don't skip it |
+| **SEC extraction pipeline fails — can't extract quality data from filings** | Critical | Medium | Try different extraction methods: structured parsing, better prompts, different models, GraphRAG-SDK. If filings can't be machine-read reliably, the entire premise collapses |
+| **Building agents before data quality** | High | High | Phase 0 focuses on data extraction, not agents. Don't build sophisticated agent orchestration until the graph has quality data from SEC filings |
 | **Graph noise overwhelms signal** | High | Medium | Confidence thresholds, multi-source corroboration, Phase 7 signal analysis to prune low-value relationships |
 | **Confirmation bias amplification** | High | Medium | Bear case requirement in every report, Phase 7 bias auditing, explicit disconfirming evidence instructions |
 | **FalkorDB OOM at 5K+ companies** | High | Medium | Monitor memory, prune old data. Workstation has 64 GB RAM total; budget ~16 GB for FalkorDB via `--maxmemory` |
@@ -689,7 +716,7 @@ src/investment_researcher/
 | **RTX 5090 thermal/power under sustained load** | Medium | Medium | GPU power limit at 400W (vs. 575W TDP), monitor thermals, adequate case airflow. See [08-hardware-requirements.md](08-hardware-requirements.md) |
 | **Mac Studio thermal throttling** | Medium | Medium | Dedicated ventilated space, monitor thermals, stagger batch jobs. Only relevant if Phase 6 gate passed |
 | **exo/RDMA stability issues** | Medium | Medium | Fallback to llama.cpp RPC backend or single-node inference on largest Studio. Only relevant for Phase 6+ |
-| **Survivorship bias in validation** | Medium | High | Use blind validation in Phase 0 (don't cherry-pick favorable historical events). Track forward-looking accuracy in Phase 7 |
+| **Survivorship bias in evaluation** | Medium | High | Track forward-looking accuracy in Phase 7. Don't cherry-pick favorable examples when evaluating extraction quality |
 | **Maintenance burden** | Medium | High | Data pipelines break, APIs change, LLMs degrade. Budget ongoing maintenance. Not a "build once, run forever" system |
 | **News API costs at scale** | Low | Medium | Switch to RSS feeds, use free tiers strategically |
 | **No investment workflow** | High | Medium | Paper trading from Phase 4. Without tracking outcomes, no way to know if the system works. See [04-agent-system.md](04-agent-system.md) § Investment Decision Workflow |

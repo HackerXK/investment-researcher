@@ -1051,7 +1051,7 @@ Track aggregate metrics to answer: **"Is this system actually useful?"**
 
 ## LLM Model Strategy
 
-| Component | POC Model | Local LLM Target (Mac Studio Cluster) |
+| Component | Initial Model | Local LLM Target (Mac Studio Cluster) |
 |-----------|-----------|---------------------------------------|
 | Triage Agent | gpt-4.1-mini | Llama 3.1 8B |
 | Data Monitor | gpt-4.1-mini | Llama 3.1 8B |
@@ -1069,7 +1069,7 @@ Agents use the OpenAI Agents SDK `LitellmModel` extension for model portability:
 ```python
 from agents.extensions.models.litellm_model import LitellmModel
 
-# POC: OpenAI
+# Initial: OpenAI
 model = LitellmModel(model="openai/gpt-4.1")
 
 # Local: exo cluster (OpenAI-compatible API)

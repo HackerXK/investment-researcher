@@ -639,7 +639,7 @@ This is what separates institutional-grade research from surface-level analysis.
    - **Hop distance**: See "Confidence & Data Quality Principles" above — 0.9 per hop
    - Combined: `effective_confidence = base_confidence × staleness_multiplier × hop_decay`
 
-2. **Source citation mandatory**: Every edge MUST have a `source` property. No exceptions. If source is unknown, mark as `"source": "manual_seed_unverified"` and flag for review.
+2. **Source citation mandatory**: Every edge MUST have a `source` property. No exceptions. If source is unknown, mark as `"source": "unverified"` and flag for review.
 
 3. **Temporal validity**: For time-sensitive relationships (SUPPLIES_TO, HOLDS_POSITION), always populate `last_confirmed`. If > 1 year old, flag for re-verification.
 

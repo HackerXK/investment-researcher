@@ -11,7 +11,7 @@
 | Document Processing | MarkItDown | 0.1.4+ | Convert PDF/DOCX/PPTX/XLSX/HTML → Markdown |
 | Agent Orchestration | OpenAI Agents SDK | 0.9+ | Multi-agent system, handoffs, guardrails, tools |
 | Observability | Langfuse | latest | LLM tracing, cost tracking, prompt management |
-| LLM Provider (POC) | OpenAI API | — | GPT-4.1, GPT-4.1-mini, text-embedding-3-small |
+| LLM Provider (Initial) | OpenAI API | — | GPT-4.1, GPT-4.1-mini, text-embedding-3-small |
 | LLM Provider (Future) | exo / MLX on Mac Studio cluster | — | Distributed local model serving via Thunderbolt 5 RDMA (Phase 6+, gated on RTX 5090 proving insufficient) |
 | Task Scheduling | APScheduler | 3.x | Cron-like scheduling for ingestion + agent loops |
 | Report Storage | SQLite | 3.x | Report queue, ingestion state tracking |
@@ -228,7 +228,7 @@ The Mac Studio cluster runs **exo** for distributed inference and exposes an Ope
 ```python
 from agents.extensions.models.litellm_model import LitellmModel
 
-# POC: OpenAI
+# Initial: OpenAI
 model = LitellmModel(model="openai/gpt-4.1")
 
 # Local: exo cluster on Mac Studio (OpenAI-compatible API)

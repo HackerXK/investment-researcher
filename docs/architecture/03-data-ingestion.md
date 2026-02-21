@@ -30,7 +30,7 @@ Each data source is classified by priority tier, which maps to the [phased roadm
 
 | Tier | Definition | When to Build |
 |------|-----------|---------------|
-| **Tier 0** | Foundation — the graph is useless without these | Phase 0 (POC) and Phase 1-2 |
+| **Tier 0** | Foundation — the graph is useless without these | Phase 0 (Data Foundation) and Phase 1-2 |
 | **Tier 1** | Core value — these enable multi-hop analysis and cross-domain connections that differentiate the platform | Phase 2-3 |
 | **Tier 2** | Institutional parity — these close the gap with institutional investors | Phase 3-5 |
 | **Tier 3** | Enhancement — adds depth but not critical path | Phase 5+ |
@@ -242,7 +242,7 @@ This pipeline covers company-level financial data (Tier 0) and macro-economic in
 | **Graph Nodes** | `Company` (enrichment), `Industry`, `Sector` |
 | **Relationships** | `OPERATES_IN` |
 | **Alternatives** | Alpha Vantage (free, 25 req/day; premium $50/mo), Polygon.io ($29/mo starter), Yahoo Finance (unofficial, fragile) |
-| **Notes** | Best value for price + fundamental data. The free tier is enough for the POC (50 companies). Starter tier handles Phase 3 scale. Use for company profile seeding, industry/sector classification (GICS), and ongoing price snapshots for paper trading. Financial ratios and time series data written to DuckDB (full history); latest snapshot recomputed onto FalkorDB Company node properties |
+| **Notes** | Best value for price + fundamental data. The free tier is enough for Phase 0 (50 companies). Starter tier handles Phase 3 scale. Use for company profile seeding, industry/sector classification (GICS), and ongoing price snapshots for paper trading. Financial ratios and time series data written to DuckDB (full history); latest snapshot recomputed onto FalkorDB Company node properties |
 
 #### FRED — Federal Reserve Economic Data (Tier 2)
 
@@ -365,7 +365,7 @@ This pipeline covers company-level financial data (Tier 0) and macro-economic in
 | **Graph Nodes** | `NewsArticle` |
 | **Relationships** | `MENTIONED_IN` (Company → NewsArticle) |
 | **Recommendation** | Start with **Marketaux** — best balance of financial focus, pricing, and historical depth for investment research. GNews as backup. NewsAPI is good but expensive at scale and prohibits commercial use on free tier |
-| **Notes** | News is essential for the Data Monitor Agent to detect events and trigger ripple analysis. For the POC, the free tiers are sufficient |
+| **Notes** | News is essential for the Data Monitor Agent to detect events and trigger ripple analysis. For Phase 0-1, the free tiers are sufficient |
 
 ### Cadence
 - **Every 15-30 minutes**: Poll for new articles
@@ -454,7 +454,7 @@ This pipeline covers company-level financial data (Tier 0) and macro-economic in
 | **Key Data** | Customer-supplier relationships, revenue concentration, geographic supply chain dependencies |
 | **Graph Nodes** | `Company` |
 | **Relationships** | `SUPPLIES_TO`, `COMPETES_WITH`, `PARTNERS_WITH` |
-| **Notes** | **This is the hardest data to get for free and the most valuable for multi-hop analysis.** Companies are legally required to disclose material customer concentrations (>10% of revenue). Supplement with ImportYeti for import/export relationships. The confidence on LLM-extracted relationships should be lower than on structured data. Manual curation of the top 100-200 most important supply chain relationships is worth the effort for the POC |
+| **Notes** | **This is the hardest data to get for free and the most valuable for multi-hop analysis.** Companies are legally required to disclose material customer concentrations (>10% of revenue). Supplement with ImportYeti for import/export relationships. The confidence on LLM-extracted relationships should be lower than on structured data. Manual curation of the top 100-200 most important supply chain relationships is worth the effort for Phase 0 (complementing SEC extraction) |
 
 #### Edge Property Extraction Strategy
 
@@ -525,7 +525,6 @@ Extract from **DEF 14A (Proxy Statement)**:
 | 10-K "Risk Factors" LLM extraction | 0.70–0.85 | Narrative, some interpretation needed |
 | News article LLM extraction | 0.60–0.75 | Secondary source, less authoritative |
 | Wikipedia / public databases | 0.50–0.70 | Crowd-sourced, needs verification |
-| Manual seed data (Phase 0) | 0.90–1.0 | Hand-verified from SEC filings |
 
 **Corroboration boost**: If the same relationship appears in multiple sources (e.g., 10-K + news + ImportYeti), increase confidence by 0.05–0.10.
 
@@ -606,7 +605,7 @@ Extract from **DEF 14A (Proxy Statement)**:
 | **Graph Nodes** | `Legislator`, `CongressionalTrade` |
 | **Relationships** | `DISCLOSED_TRADE` (Legislator → CongressionalTrade), `INVOLVES` (CongressionalTrade → Company), `MEMBER_OF` (Legislator → Committee) |
 | **Update Frequency** | Members must disclose within 45 days (often late). New disclosures daily |
-| **Notes** | For the POC, use Quiver Quant API or scrape Capitol Trades. For production, build a parser for the raw disclosures to eliminate third-party dependency. Cross-referencing trades with committee assignments is where the real value lies |
+| **Notes** | For early phases, use Quiver Quant API or scrape Capitol Trades. For production, build a parser for the raw disclosures to eliminate third-party dependency. Cross-referencing trades with committee assignments is where the real value lies |
 
 #### Congressional Committee Assignments (Tier 1)
 
@@ -1233,7 +1232,7 @@ If the platform evolves to consume **push-based / webhook feeds** (e.g., EDGAR's
 | Category | Sources | Annual Cost |
 |----------|---------|-------------|
 | **Completely Free** | EDGAR, EDGAR XBRL, FRED, Congress.gov, USASpending, BLS, BEA, World Bank, IMF, OpenFIGI, Federal Register, PatentsView, LDA (lobbying) | **$0** |
-| **Freemium (free tier sufficient for POC)** | FMP, Marketaux, GNews, CoinGecko, BLS registered | **$0** for POC |
+| **Freemium (free tier sufficient for Phase 0-1)** | FMP, Marketaux, GNews, CoinGecko, BLS registered | **$0** for Phase 0-1 |
 | **Recommended paid (production)** | FMP Starter ($14/mo), Marketaux Standard ($29/mo) | **~$516/yr** |
 | **Optional paid** | Quiver Quant ($10-30/mo), Unusual Whales ($57/mo) | **~$500-1,000/yr** |
 | **Total for full production** | All recommended | **~$500-1,500/yr** |
@@ -1263,11 +1262,10 @@ If the platform evolves to consume **push-based / webhook feeds** (e.g., EDGAR's
 
 ## Recommended Build Order
 
-### Phase 0 (POC — 50 companies, 1-2 weeks)
-1. **EDGAR** — 10-K, 10-Q for 50 semiconductor companies
+### Phase 0 (Data Foundation — 50 companies, 2-3 weeks)
+1. **EDGAR** — 10-K, 10-Q for 50 semiconductor companies (fetch, parse, LLM-extract entities/relationships)
 2. **EDGAR XBRL** — Financial metrics for those 50 companies
-3. **FMP (free tier)** — Company profiles, prices, sector/industry
-4. **One news API (free tier)** — Marketaux or GNews
+3. **FMP (free tier)** — Company profiles, prices, sector/industry (optional, lower priority than SEC extraction)
 
 ### Phase 1-2 (Core graph — 500 companies)
 5. **EDGAR XBRL bulk download** — All company financials

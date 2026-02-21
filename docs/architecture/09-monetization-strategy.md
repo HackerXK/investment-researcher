@@ -481,7 +481,7 @@ Once the platform is built and producing results, the intersection of **AI + fin
 
 | Priority | Stream | When | First Action |
 |----------|--------|------|-------------|
-| 1 | **Newsletter (A1)** | Phase 4 | Create Substack. Publish first "Graph of the Week" from POC results |
+| 1 | **Newsletter (A1)** | Phase 4 | Create Substack. Publish first "Graph of the Week" from early platform results |
 | 2 | **LLM Inference API (A3)** | Phase 4 | Set up LiteLLM proxy with auth. Post on r/LocalLLaMA |
 | 3 | **Open Source (A4)** | Phase 3 | Extract SEC EDGAR pipeline into standalone repo. Ship early |
 | 4 | **Signal Alerts (A2)** | Phase 5 | Add to premium newsletter tier once enough data for pattern detection |
@@ -501,4 +501,4 @@ The newsletter is the **keystone** of the monetization strategy. It:
 - Forces consistent research output, which also improves personal investment decisions
 - Positions you as a domain expert, enabling consulting and speaking
 
-**Start the newsletter the moment the platform produces its first interesting graph-powered insight — even from the Phase 0 POC with 50 companies.**
+**Start the newsletter the moment the platform produces its first interesting graph-powered insight — even from Phase 0 with 50 companies and SEC-extracted data.**

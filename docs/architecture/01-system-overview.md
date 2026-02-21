@@ -1,6 +1,6 @@
 # System Overview — Investment Research Graph Platform
 
-> **Strategic context**: See [00-strategic-rationale.md](00-strategic-rationale.md) for the competitive landscape analysis, edge assessment, risk evaluation, and Phase 0 validation approach that inform this architecture.
+> **Strategic context**: See [00-strategic-rationale.md](00-strategic-rationale.md) for the competitive landscape analysis, edge assessment, risk evaluation, and data-quality-first development philosophy that inform this architecture.
 
 ## Vision
 
@@ -117,7 +117,7 @@ A **one-person institutional research desk** that maintains a living knowledge g
 | **Document preprocessing** | MarkItDown → GraphRAG-SDK | MarkItDown handles formats GraphRAG-SDK doesn't natively support (PPTX, XLSX, audio). Unified markdown output for LLM consumption |
 | **Observability** | Langfuse (self-hosted) | Open-source, captures full traces, cost tracking. Integrated with OpenAI Agents SDK via OpenInference bridge |
 | **Report storage** | SQLite | Lightweight, no extra infrastructure, sufficient for local deployment. Agent writes structured JSON findings |
-| **LLM strategy** | OpenAI API for POC → Local LLM later | GPT-4.1 for KG construction quality. Migrate to Mac Studio cluster (2–4 × 512 GB) running exo/MLX with LiteLLM abstraction layer |
+| **LLM strategy** | OpenAI API initially → Local LLM later | GPT-4.1 for KG construction quality. Migrate to Mac Studio cluster (2–4 × 512 GB) running exo/MLX with LiteLLM abstraction layer |
 | **Ontology approach** | Hybrid: hand-crafted core + auto-extend | Structured financial data needs precise schema. Unstructured text benefits from auto-detection |
 | **Deployment** | AMD Workstation + MacBook Pro | AMD Workstation (64GB DDR5, RTX 5090, 6TB NVMe: 2TB P41 + 4TB SN5000 RAID 0) runs all Docker containers and GPU inference. MacBook Pro M2 Pro is dev terminal only. NAS added at Phase 5 when total NVMe hits ~4.2TB (70%). Mac Studio cluster deferred to Phase 6+. See [06-deployment.md](06-deployment.md) |
 
