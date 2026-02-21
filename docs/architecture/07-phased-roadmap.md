@@ -44,7 +44,7 @@ Foundation   Extraction   Data         Enrichment   System       Automate     Ex
 - [ ] `.env.example` (OpenAI key only for now — Phase 1 adds Langfuse, Phase 2 adds data API keys)
 - [ ] `src/investment_researcher/config.py` — env var loading (Phase 1 expands, never replaces)
 - [ ] `src/investment_researcher/graph/connection.py` — FalkorDB connection + health check (Phase 1 adds retry logic)
-- [ ] `src/investment_researcher/graph/schema.py` — core ontology: Company, Industry, Filing, NewsArticle (Phase 1 adds full schema + indexes)
+- [ ] `src/investment_researcher/graph/schema.py` — core ontology: Company, Person, Industry, Sector, Filing, Region (Phase 1 adds full schema + indexes). See [02-graph-schema.md](02-graph-schema.md) for current scope
 - [ ] `cli.py` — Typer CLI with `chat` and `ingest` commands (Phase 1 adds `health` — same file throughout)
 
 #### SEC EDGAR Pipeline (Core Development Focus)
@@ -116,7 +116,7 @@ investment-researcher/
 │       ├── config.py             ✓  (env var loading)
 │       ├── graph/
 │       │   ├── connection.py     ✓  (FalkorDB connection + health check)
-│       │   └── schema.py         ✓  (Company, Industry, Filing, NewsArticle + indexes)
+│       │   └── schema.py         ✓  (Company, Person, Industry, Sector, Filing, Region + indexes)
 │       ├── ingestion/
 │       │   ├── edgar/
 │       │   │   ├── fetcher.py    ✓  (EDGAR filing fetcher — 10-K, 10-Q, 8-K download)
@@ -207,7 +207,7 @@ cli.py                        ← Phase 0 (expanded: health command added)
 
 ### Tasks
 - [ ] **DuckDB time series store setup**:
-  - [ ] Initialize `data/financial_timeseries.duckdb` with schema (see [02-graph-schema.md](02-graph-schema.md) § Time Series Data Store)
+  - [ ] Initialize `data/duckdb/financial_timeseries.duckdb` with schema (see [02-graph-schema.md](02-graph-schema.md) § Time Series Data Store)
   - [ ] `financial_metrics` table (ticker, metric_type, value, period, period_end, accession)
   - [ ] `macro_timeseries` table (FRED/WorldBank/BLS indicators)
   - [ ] Snapshot recompute logic: DuckDB window functions → FalkorDB Company node properties
@@ -227,7 +227,7 @@ cli.py                        ← Phase 0 (expanded: health command added)
   - [ ] Write time series → DuckDB; recompute latest snapshot → FalkorDB Company node
 - [ ] FRED API integration for starter macro indicators (Fed Funds Rate, CPI, GDP)
 - [ ] World Bank / IMF API integration for country economic data
-- [ ] Region/Country nodes: GDP, growth, credit rating, trade balance
+- [ ] Region/Country nodes: identifier-only (name, iso_code, type). Economic data (GDP, credit rating, trade balance) stored as MacroIndicator nodes linked to Region — see [02-graph-schema.md](02-graph-schema.md)
 - [ ] Entity resolution: ticker/CIK-based dedup
 - [ ] Ingestion state tracking (SQLite)
 - [ ] CLI commands: `ingest edgar`, `ingest financials`, `ingest macro`, `ingest countries`
@@ -243,7 +243,7 @@ cli.py                        ← Phase 0 (expanded: health command added)
 - `SELECT COUNT(*) FROM financial_metrics` → meaningful count (thousands of rows)
 - MacroIndicator nodes show current Fed Funds Rate, CPI, GDP, etc.
 - DuckDB `macro_timeseries` table has historical FRED data
-- Region nodes populated for G20 countries with economic profiles
+- Region nodes populated for G20 countries (identifier-only). MacroIndicator nodes linked to Regions for economic profiles
 - `python cli.py chat "What is Apple's revenue trend?"` returns data-backed answer with trend
 - `python cli.py chat "What is China's GDP growth?"` returns country data
 - Ingestion is incremental: re-running skips already-processed filings

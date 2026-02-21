@@ -94,25 +94,6 @@ SEC filings (10-K, 10-Q, 8-K, proxy statements, etc.)
 })
 ```
 
-### NewsArticle
-News items from various sources.
-
-```
-(:NewsArticle {
-  article_id: STRING,      -- Hash of URL or unique ID from source
-  title: STRING,
-  source: STRING,           -- "Reuters", "Bloomberg", etc.
-  url: STRING,
-  published_date: STRING,   -- ISO timestamp
-  summary: STRING,          -- LLM-generated or original summary
-  sentiment: FLOAT,         -- -1.0 to 1.0
-  impact_score: FLOAT,      -- 0.0 to 1.0, estimated market impact
-  categories: [STRING],     -- ["earnings", "supply-chain", "regulation"]
-  embedding: VECTOR,        -- For semantic search
-  processed: BOOL
-})
-```
-
 ### Industry
 Industry classifications (GICS-aligned).
 
@@ -136,166 +117,39 @@ Higher-level grouping of industries (GICS sectors).
 })
 ```
 
-### MacroIndicator
-Macroeconomic data points.
-
-```
-(:MacroIndicator {
-  name: STRING,            -- "Federal Funds Rate", "CPI", "GDP Growth",
-                           --  "Unemployment Rate", "Consumer Confidence Index"
-  value: FLOAT,
-  unit: STRING,            -- "percent", "index", "billions_usd"
-  date: STRING,            -- "2025-09-30"
-  source: STRING,          -- "FRED", "BLS", "BEA"
-  trend: STRING,           -- "rising", "falling", "stable"
-  last_updated: STRING
-})
-```
-
 ### Region
-Geographic regions / markets / countries. Enriched with economic data for countries.
+Geographic anchor for company HQ, operations, and market presence. Populated from 10-K cover page and segment reporting. **Economic data (GDP, credit rating, trade balance, etc.) is a future-phase addition** — do not store it here until a dedicated macro data source is integrated.
 
 ```
 (:Region {
   name: STRING,            -- "United States", "China", "European Union"
   region_type: STRING,     -- "country", "economic_bloc", "state", "city"
   iso_code: STRING,        -- "US", "CN", "EU" (ISO 3166-1 alpha-2 for countries)
-  gdp: FLOAT,             -- Latest GDP in USD
-  gdp_growth_pct: FLOAT,  -- Year-over-year GDP growth rate
-  population: INT,
-  currency: STRING,        -- "USD", "EUR", "CNY"
-  credit_rating: STRING,   -- "AAA", "AA+", etc. (sovereign credit rating)
-  central_bank: STRING,    -- "Federal Reserve", "ECB", "PBOC"
-  trade_balance: FLOAT,    -- Current account balance in USD
-  debt_to_gdp: FLOAT,      -- Government debt as % of GDP
   last_updated: STRING
 })
 ```
 
-### Commodity
-Key commodities that affect companies/industries.
+---
 
-```
-(:Commodity {
-  name: STRING,            -- "Crude Oil", "Lithium", "Semiconductor Wafers"
-  category: STRING,        -- "energy", "metal", "agricultural", "tech_material"
-  unit: STRING,            -- "barrel", "ton", "wafer"
-  current_price: FLOAT,
-  price_currency: STRING,
-  last_updated: STRING
-})
-```
+## Future Data Sources
 
-### ResearchReport
-Agent-generated investment research.
+The nodes and relationships below are **intentionally not schema'd yet**. They represent data categories we want to incorporate in later phases. Schema detail will be added when the ingestion pipeline for each source is being built.
 
-```
-(:ResearchReport {
-  report_id: STRING,       -- UUID
-  title: STRING,
-  thesis: STRING,          -- Investment thesis summary
-  confidence: FLOAT,       -- 0.0 to 1.0
-  report_type: STRING,     -- "opportunity", "risk", "ripple_effect", "macro_impact",
-                           --  "political_signal"
-  generated_by: STRING,    -- Agent name
-  generated_at: STRING,    -- ISO timestamp
-  status: STRING           -- "new", "reviewed", "archived", "acted_on"
-})
-```
+### Phase 2 — Market & Alternative Data
+- **NewsArticle** — news from Reuters, Bloomberg, FMP news feed; key fields: `article_id`, `title`, `source`, `url`, `published_date`, `summary` (LLM-generated), `sentiment`, `impact_score`, `embedding`; linked to companies via `MENTIONED_IN`
+- **Commodity** — crude oil, lithium, semiconductor wafers, etc.; linked to companies via `DEPENDS_ON` / `PRODUCES` and to industries via `AFFECTS_INDUSTRY`
+- **MacroIndicator** — Fed Funds Rate, CPI, GDP Growth (FRED/BLS/BEA); linked to industries via `AFFECTED_BY`; all time series in DuckDB `macro_timeseries`; graph node is reference anchor only (`indicator_id`, `name`, `unit`, `source`)
+- **ResearchReport** — agent-generated investment theses; linked to companies, filings, news
 
-### Legislator
-US Congress members (Senate and House) and other political figures whose actions affect markets.
+### Phase 3 — Political & Government Data
+- **Legislator** — Congress members; source: bioguide.congress.gov, Capitol Trades API
+- **CongressionalTrade** — STOCK Act disclosures; source: Capitol Trades API / house.gov / senate.gov
+- **Legislation** — bills, executive orders, regulations, tariffs; source: congress.gov, Federal Register
+- **GovernmentContract** — federal contract awards; source: USAspending.gov
 
-```
-(:Legislator {
-  name: STRING,            -- "Nancy Pelosi"
-  bioguide_id: STRING,     -- Official Bioguide ID (unique identifier)
-  party: STRING,           -- "D", "R", "I"
-  chamber: STRING,         -- "Senate", "House"
-  state: STRING,           -- "CA", "NY"
-  district: STRING,        -- "12" (House only, null for Senate)
-  committees: [STRING],    -- ["Financial Services", "Armed Services"]
-  in_office: BOOL,         -- Whether currently serving
-  office_start: STRING,    -- "2019-01-03"
-  office_end: STRING,      -- null if currently serving
-  last_updated: STRING
-})
-```
-
-### CongressionalTrade
-STOCK Act disclosure records — trades by members of Congress and their spouses.
-
-```
-(:CongressionalTrade {
-  disclosure_id: STRING,   -- Unique ID from disclosure filing
-  transaction_date: STRING,-- Date the trade was executed
-  disclosure_date: STRING, -- Date the disclosure was filed
-  transaction_type: STRING,-- "purchase", "sale", "exchange"
-  asset_type: STRING,      -- "stock", "option", "bond", "crypto"
-  asset_description: STRING,-- "Apple Inc (AAPL) - Common Stock"
-  amount_range_low: FLOAT, -- Lower bound of amount range (e.g., 15001)
-  amount_range_high: FLOAT,-- Upper bound (e.g., 50000)
-  owner: STRING,           -- "self", "spouse", "dependent"
-  filing_url: STRING,      -- Link to original disclosure PDF
-  last_updated: STRING
-})
-```
-
-### Legislation
-Bills, acts, executive orders, regulations, and trade policies that may affect markets.
-
-```
-(:Legislation {
-  bill_id: STRING,         -- "HR-3076", "S-1234", "EO-14067"
-  title: STRING,           -- "Postal Service Reform Act of 2022"
-  legislation_type: STRING,-- "bill", "resolution", "executive_order",
-                           --  "regulation", "tariff_order", "trade_agreement"
-  status: STRING,          -- "introduced", "committee", "passed_house",
-                           --  "passed_senate", "signed", "vetoed", "enacted"
-  introduced_date: STRING,
-  last_action_date: STRING,
-  summary: STRING,         -- LLM-generated summary of market impact
-  affected_sectors: [STRING], -- ["Healthcare", "Technology"]
-  sentiment: FLOAT,        -- -1.0 to 1.0 (market sentiment)
-  embedding: VECTOR,       -- For semantic search across legislation
-  source: STRING,          -- "congress.gov", "federal_register", "whitehouse.gov"
-  last_updated: STRING
-})
-```
-
-### GovernmentContract
-Federal contracts awarded to companies (from USAspending.gov).
-
-```
-(:GovernmentContract {
-  contract_id: STRING,     -- PIID or unique contract identifier
-  awarding_agency: STRING, -- "Department of Defense", "NASA", "HHS"
-  description: STRING,     -- Contract description
-  total_value: FLOAT,      -- Total contract value in USD
-  award_date: STRING,
-  period_start: STRING,
-  period_end: STRING,
-  naics_code: STRING,      -- Industry classification code
-  contract_type: STRING,   -- "fixed_price", "cost_plus", "time_and_materials"
-  last_updated: STRING
-})
-```
-
-### InstitutionalHolder
-Hedge funds, mutual funds, pension funds, and other institutional investors that file 13F reports.
-
-```
-(:InstitutionalHolder {
-  cik: STRING,             -- SEC CIK number
-  name: STRING,            -- "Berkshire Hathaway Inc"
-  holder_type: STRING,     -- "hedge_fund", "mutual_fund", "pension_fund",
-                           --  "insurance", "bank", "sovereign_wealth_fund"
-  aum_usd: FLOAT,          -- Approximate assets under management
-  filing_count: INT,        -- Number of 13F filings on record
-  last_filing_date: STRING,
-  last_updated: STRING
-})
-```
+### Phase 4 — Institutional Holdings
+- **InstitutionalHolder** — 13F filers (hedge funds, mutual funds, pension funds); source: SEC EDGAR 13F filings
+  - Key relationship: `HOLDS_POSITION` → Company, with shares, value, quarter, position change
 
 ---
 
@@ -337,7 +191,9 @@ Hedge funds, mutual funds, pension funds, and other institutional investors that
                                --  $20B+ annual spend per analyst estimates."
 }]->(:Company)
 
-(:Company)-[:CUSTOMER_OF]->(:Company)  // Inverse of SUPPLIES_TO (auto-created)
+// Note: to find customers of a company, traverse SUPPLIES_TO in reverse:
+// MATCH (supplier:Company {ticker: "TSM"})<-[:SUPPLIES_TO]-(customer:Company)
+// CUSTOMER_OF is not stored — it's redundant and doubles edge count.
 
 // Competition
 (:Company)-[:COMPETES_WITH {
@@ -393,10 +249,16 @@ Hedge funds, mutual funds, pension funds, and other institutional investors that
                                --  and access to mobile gaming via King."
 }]->(:Company)
 
+// Direction convention: (absorbed)-[:MERGED_WITH]->(survivor)
+// The arrow points TO the surviving entity — no need for a surviving_entity string property.
 (:Company)-[:MERGED_WITH {
   merge_date: STRING,
-  surviving_entity: STRING     -- Ticker of surviving company
-}]->(:Company)
+  deal_value_usd: FLOAT,
+  deal_type: STRING,           -- "cash", "stock", "mixed"
+  source: STRING,
+  description: STRING          -- LLM-generated context: rationale, regulatory hurdles,
+                               --  what was absorbed, what survived, market reaction
+}]->(:Company)                 -- target node IS the surviving entity
 
 (:Company)-[:JOINT_VENTURE_WITH {
   jv_name: STRING,
@@ -488,149 +350,48 @@ Hedge funds, mutual funds, pension funds, and other institutional investors that
 
 ### Company ↔ News
 
-```cypher
-(:Company)-[:MENTIONED_IN {
-  mention_type: STRING,       -- "primary_subject", "mentioned", "compared_to"
-  sentiment: FLOAT
-}]->(:NewsArticle)
-```
+> **Future Phase 2.** Schema TBD when news ingestion is built. Intended relationship: `MENTIONED_IN` (Company → NewsArticle) with mention_type and sentiment. Source: FMP news feed, Reuters, Bloomberg.
 
 ### Company ↔ Commodities
 
-```cypher
-(:Company)-[:DEPENDS_ON {
-  dependency_type: STRING,    -- "raw_material", "energy", "component"
-  criticality: STRING          -- "high", "medium", "low"
-}]->(:Commodity)
-
-(:Company)-[:PRODUCES]->(:Commodity)
-```
+> **Future Phase 2.** Schema TBD when commodity data ingestion is built. Intended relationships: `DEPENDS_ON` (raw material / energy / component input) and `PRODUCES` (for commodity-producing companies). Source: 10-K risk factors and business description.
 
 ### Industry / Macro Connections
 
-```cypher
-(:Industry)-[:AFFECTED_BY {
-  correlation: FLOAT,         -- -1.0 to 1.0
-  lag_months: INT,            -- How many months the effect is delayed
-  mechanism: STRING            -- "demand_driver", "cost_driver", "regulatory"
-}]->(:MacroIndicator)
-
-(:Region)-[:REPORTS_INDICATOR]->(:MacroIndicator)
-
-(:Commodity)-[:AFFECTS_INDUSTRY {
-  impact_type: STRING          -- "input_cost", "demand_proxy"
-}]->(:Industry)
-```
+> **Future Phase 2.** Schema TBD. Intended relationships: `AFFECTED_BY` (Industry → MacroIndicator, with correlation and lag), `AFFECTS_INDUSTRY` (Commodity → Industry). Source: academic studies, historical regressions against FRED data.
 
 ### Research Report Connections
 
-```cypher
-(:ResearchReport)-[:ABOUT]->(:Company)
-(:ResearchReport)-[:TRIGGERED_BY]->(:NewsArticle)
-(:ResearchReport)-[:BASED_ON]->(:Filing)
-(:ResearchReport)-[:REFERENCES]->(:MacroIndicator)
-(:ResearchReport)-[:REFERENCES]->(:Legislation)
-(:ResearchReport)-[:REFERENCES]->(:CongressionalTrade)
-```
+> **Future Phase 2.** Schema TBD. Agent-generated reports will link to Company, NewsArticle, Filing, MacroIndicator, Legislation, CongressionalTrade nodes as evidence anchors.
 
-### Legislator ↔ Congressional Trades
+### Legislator ↔ Congressional Trades & Committees
 
-```cypher
-// Congressional investment disclosures (STOCK Act)
-(:Legislator)-[:DISCLOSED_TRADE]->(:CongressionalTrade)
-
-(:CongressionalTrade)-[:INVOLVES {              
-  ticker: STRING                -- Stock ticker of the traded company
-}]->(:Company)
-```
-
-### Legislator ↔ Legislation & Committees
-
-```cypher
-(:Legislator)-[:SPONSORED {    
-  cosponsor: BOOL              -- true if cosponsor, false if primary sponsor
-}]->(:Legislation)
-
-(:Legislator)-[:SERVES_ON_COMMITTEE {
-  committee_name: STRING,      -- "Financial Services", "Armed Services"
-  role: STRING,                -- "chair", "ranking_member", "member"
-  start_date: STRING,
-  end_date: STRING,
-  description: STRING          -- LLM-generated context on oversight scope, e.g. "As Chair
-                               --  of the Senate Armed Services Committee, sets DoD
-                               --  procurement budget priorities and has oversight over
-                               --  all major defense contracts exceeding $100M."
-}]->(:Industry)                -- Committee mapped to the industries it oversees
-```
+> **Future Phase 3.** Schema TBD. Intended relationships: `DISCLOSED_TRADE` (Legislator → CongressionalTrade → Company), `SPONSORED` (Legislator → Legislation), `SERVES_ON_COMMITTEE` (Legislator → Industry). Source: Capitol Trades API, bioguide.congress.gov.
 
 ### Legislation ↔ Industries & Companies
 
-```cypher
-(:Legislation)-[:AFFECTS {
-  impact_type: STRING,         -- "regulatory", "tax", "subsidy", "tariff", "ban"
-  direction: STRING,           -- "positive", "negative", "neutral"
-  confidence: FLOAT,           -- 0.0-1.0
-  source: STRING,              -- "llm_analysis", "expert", "news"
-  description: STRING          -- LLM-generated explanation of the specific mechanism, e.g.
-                               --  "CHIPS Act §103 provides $52B in domestic fab subsidies.
-                               --  Direct beneficiaries: Intel (Ohio fab), TSMC (Arizona).
-                               --  Estimated margin improvement: 200-400bps for qualifying
-                               --  capex over 5-year depreciation window."
-}]->(:Industry)
-
-(:Legislation)-[:AFFECTS]->(:Company)  // Direct company impact (e.g., government contracts)
-
-(:Legislation)-[:AFFECTS]->(:Region)   // Trade agreements, tariffs target countries
-```
+> **Future Phase 3.** Schema TBD. Intended relationships: `AFFECTS` (Legislation → Industry, Company, Region) with impact_type, direction, confidence. Source: congress.gov, LLM analysis of bill text.
 
 ### Institutional Holdings (13F)
 
-```cypher
-(:InstitutionalHolder)-[:HOLDS_POSITION {
-  shares: INT,                 -- Number of shares held
-  value_usd: FLOAT,            -- Market value at filing date
-  quarter: STRING,             -- "Q3-2025"
-  filing_date: STRING,
-  change_shares: INT,          -- Change from previous quarter
-  change_pct: FLOAT,           -- Percentage change
-  position_type: STRING        -- "new", "increased", "decreased", "unchanged", "sold_out"
-}]->(:Company)
-
-(:InstitutionalHolder)-[:FILED_13F]->(:Filing)
-```
+> **Future Phase 4.** Schema TBD. Intended relationship: `HOLDS_POSITION` (InstitutionalHolder → Company) with shares, value, quarter, position change type. Source: SEC EDGAR 13F filings.
 
 ### Government Contracts
 
-```cypher
-(:Company)-[:AWARDED_CONTRACT {
-  role: STRING                 -- "prime", "subcontractor"
-}]->(:GovernmentContract)
-
-(:GovernmentContract)-[:FUNDED_BY {
-  agency: STRING               -- "DoD", "NASA", "HHS"
-}]->(:Region)                  -- Tied to the funding country/government
-```
+> **Future Phase 3.** Schema TBD. Intended relationships: `AWARDED_CONTRACT` (Company → GovernmentContract). Source: USAspending.gov.
 
 ### Country ↔ Trade & Policy
 
-```cypher
-(:Region)-[:TRADES_WITH {
-  trade_volume_usd: FLOAT,     -- Bilateral trade volume
-  trade_balance_usd: FLOAT,    -- Balance (positive = surplus)
-  year: STRING
-}]->(:Region)
-
-(:Region)-[:HAS_POLICY]->(:Legislation)  // Tariffs, trade agreements, sanctions
-```
+> **Future Phase 3.** Schema TBD. Intended relationships: `TRADES_WITH` (Region → Region) and `HAS_POLICY` (Region → Legislation). Source: WTO, World Bank, US Census Bureau.
 
 ### Auto-Extended Relationships
 
-GraphRAG-SDK may discover relationships not in the core schema. These are stored as:
+GraphRAG-SDK may discover relationships not in the core schema from SEC filing text. These are stored as:
 
 ```cypher
 (:Company)-[:RELATED_TO {
   relationship_detail: STRING,  -- LLM-extracted description
-  source_document: STRING,      -- Which document this was extracted from
+  source_document: STRING,      -- Accession number or document identifier
   confidence: FLOAT,
   auto_detected: BOOL,         -- true (flag for review)
   detected_date: STRING
@@ -639,7 +400,7 @@ GraphRAG-SDK may discover relationships not in the core schema. These are stored
 
 Periodically review `RELATED_TO` edges and promote to named relationship types. See Phase 7 (Feedback Loop) in [07-phased-roadmap.md](07-phased-roadmap.md) for the ontology refinement process.
 
-> **Graph noise warning**: Auto-detected relationships can create false patterns. The graph will find "connections" between everything — most are meaningless. Implement confidence thresholds and require multi-source corroboration for auto-detected edges before agents use them in analysis. See [00-strategic-rationale.md](00-strategic-rationale.md) § "Honest Risk Assessment" for details.
+> **Graph noise warning**: Auto-detected relationships can create false patterns. Implement confidence thresholds and require multi-source corroboration before agents use them in analysis. See [00-strategic-rationale.md](00-strategic-rationale.md) § "Honest Risk Assessment" for details.
 
 ---
 
@@ -670,8 +431,11 @@ This is what separates institutional-grade research from surface-level analysis.
 | `contract_value_usd` | Manual (if public) | Scrape from earnings calls | Transcript parsing + UMM disambiguation |
 | `market_segment` | ✓ Industry taxonomy | LLM extraction | 10-K "Competition" section |
 | `geographic_overlap` | Industry knowledge | Company "Geographic Revenue" sections | 10-K Item 1, segment reporting |
+| `correlation` (AFFECTED_BY) | Domain knowledge / literature | Historical regression vs. DuckDB macro_timeseries | Academic studies + FRED data |
 
 > **`description` generation rule**: At ingestion time, pass the **source passage** (the paragraph from the 10-K, earnings call excerpt, or news article) directly to the LLM and ask it to write a 2–4 sentence synthesis specific to this entity pair. Do **not** generate from structured fields alone — the description should add information beyond what the structured properties already capture. Store the source passage in the `source` field for provenance.
+
+> **What NOT to store on nodes**: Commodity prices, macro indicator values, region economic snapshots — anything that changes faster than your ingestion cycle will be stale by the time an agent reads it. These belong in DuckDB or a live price feed, with the graph node serving only as the reference anchor (`name`, `indicator_id`, `unit`).
 
 ### Edge Property Validation Rules
 
@@ -692,6 +456,10 @@ This is what separates institutional-grade research from surface-level analysis.
    - `confidence`: 0.0–1.0
    - `revenue_pct`: 0.0–1.0 (can exceed 1.0 if supplier has multiple revenue streams)
    - `market_share_a/b`: 0.0–1.0
+
+6. **No volatile data on nodes**: Never store time-varying values (prices, indicator readings, trends) directly on nodes. These become stale silently and agents will use them as if current. Always query DuckDB for current values.
+
+7. **Relationship direction encodes meaning**: `MERGED_WITH` arrow points TO the surviving entity. `ACQUIRED` arrow points TO the acquired target. Never use a STRING property to encode what the graph structure already expresses.
 
 ### Query Pattern: Using Edge Properties for Precision
 
@@ -800,202 +568,23 @@ LIMIT 50
 
 ### "How might rising interest rates affect the tech sector?"
 
-```cypher
-// Find industries and companies negatively correlated with interest rates
-MATCH (rate:MacroIndicator {name: "Federal Funds Rate"})
-MATCH (ind:Industry)-[a:AFFECTED_BY]->(rate)
-MATCH (c:Company)-[:OPERATES_IN]->(ind)
-WHERE a.correlation < -0.3  // Negatively correlated industries
-  AND a.confidence > 0.7
-WITH c, ind, a,
-     // Companies with high debt loads are more exposed to rate increases
-     CASE 
-       WHEN c.debt_to_equity > 2.0 THEN 'high_debt_risk'
-       WHEN c.debt_to_equity > 1.0 THEN 'moderate_debt_risk'
-       ELSE 'low_debt_risk'
-     END AS debt_risk_tier
-RETURN c.ticker,
-       c.name,
-       ind.name AS industry,
-       round(a.correlation, 3) AS rate_correlation,
-       a.mechanism AS impact_mechanism,
-       a.lag_months AS effect_delay_months,
-       c.debt_to_equity,
-       debt_risk_tier,
-       // Worst case: high correlation + high debt + short lag
-       CASE
-         WHEN a.correlation < -0.5 AND c.debt_to_equity > 2.0 AND a.lag_months < 3
-           THEN 'severe_impact_likely'
-         WHEN a.correlation < -0.4 AND c.debt_to_equity > 1.5
-           THEN 'significant_impact_likely'
-         ELSE 'moderate_impact'
-       END AS risk_assessment
-ORDER BY a.correlation ASC, c.debt_to_equity DESC
-LIMIT 30
-```
+> Requires Phase 2 MacroIndicator + AFFECTED\_BY data. Query pattern TBD.
 
 ### "Which Congress members recently bought defense stocks?"
 
-```cypher
-// Congressional defense stock purchases + committee overlap analysis
-MATCH (l:Legislator)-[:DISCLOSED_TRADE]->(t:CongressionalTrade)-[:INVOLVES]->(c:Company)
-MATCH (c)-[:OPERATES_IN]->(ind:Industry {name: "Aerospace & Defense"})
-WHERE t.transaction_type = "purchase"
-  AND date(t.transaction_date) > date() - duration({days: 90})
-OPTIONAL MATCH (l)-[serves:SERVES_ON_COMMITTEE]->(oversight_ind:Industry)
-WHERE oversight_ind = ind
-WITH l, c, t, serves,
-     CASE WHEN serves IS NOT NULL THEN true ELSE false END AS has_oversight
-RETURN l.name,
-       l.party,
-       l.chamber,
-       l.state,
-       c.ticker,
-       c.name,
-       t.transaction_date,
-       t.amount_range_low,
-       t.amount_range_high,
-       has_oversight,
-       CASE 
-         WHEN has_oversight THEN serves.committee_name 
-         ELSE null 
-       END AS oversight_committee,
-       CASE
-         WHEN has_oversight THEN 'POTENTIAL CONFLICT - committee oversight + trading'
-         ELSE 'no direct committee oversight'
-       END AS conflict_flag
-ORDER BY t.transaction_date DESC, has_oversight DESC
-```
+> Requires Phase 3 Legislator + CongressionalTrade data. Query pattern TBD.
 
 ### "What legislation could affect the semiconductor industry?"
 
-```cypher
-// Active legislation with potential market impact on semiconductors
-MATCH (leg:Legislation)-[a:AFFECTS]->(ind:Industry)
-WHERE ind.name CONTAINS "Semiconductor"
-  AND leg.status IN ['committee', 'passed_house', 'passed_senate', 'enacted']
-  AND a.confidence > 0.7
-RETURN leg.bill_id,
-       leg.title,
-       leg.status,
-       a.impact_type,
-       a.direction,
-       a.confidence AS impact_confidence,
-       a.source AS analysis_source,
-       leg.last_action_date,
-       // Prioritize by proximity to becoming law + impact direction
-       CASE
-         WHEN leg.status = 'enacted' AND a.direction = 'positive' THEN 1
-         WHEN leg.status = 'enacted' AND a.direction = 'negative' THEN 2
-         WHEN leg.status = 'passed_senate' THEN 3
-         WHEN leg.status = 'passed_house' THEN 4
-         ELSE 5
-       END AS urgency_rank
-ORDER BY urgency_rank ASC, leg.last_action_date DESC
-```
+> Requires Phase 3 Legislation + AFFECTS data. Query pattern TBD.
 
 ### "What are the top institutional holders buying this quarter?"
 
-```cypher
-// New positions by top funds with momentum analysis
-MATCH (ih:InstitutionalHolder)-[h:HOLDS_POSITION]->(c:Company)
-WHERE h.quarter = "Q4-2025"
-  AND h.position_type IN ['new', 'increased']
-  AND ih.aum_usd > 10000000000  // Top funds (AUM > $10B)
-WITH ih, c, h,
-     h.value_usd / ih.aum_usd AS position_size_pct
-WHERE position_size_pct > 0.01  // At least 1% of AUM = conviction buy
-RETURN ih.name AS fund,
-       ih.holder_type,
-       ih.aum_usd / 1000000000 AS aum_billions,
-       c.ticker,
-       c.name,
-       h.position_type,
-       h.value_usd / 1000000 AS value_millions,
-       h.shares,
-       round(position_size_pct * 100, 2) AS pct_of_fund_aum,
-       // Larger position = higher conviction
-       CASE
-         WHEN position_size_pct > 0.05 THEN 'high_conviction'
-         WHEN position_size_pct > 0.02 THEN 'moderate_conviction'
-         ELSE 'exploratory_position'
-       END AS conviction_signal
-ORDER BY h.value_usd DESC
-LIMIT 50
-```
+> Requires Phase 4 InstitutionalHolder + HOLDS\_POSITION data. Query pattern TBD.
 
 ### "Multi-domain ripple: Congress trades + legislation + supply chain + institutional positioning"
 
-```cypher
-// THIS IS THE INSTITUTIONAL-GRADE ANALYSIS EDGE PROPERTIES ENABLE
-// Scenario: Senator on Armed Services Committee buys defense stock. What's the full picture?
-
-MATCH (senator:Legislator {name: "Mark Kelly"})-[serves:SERVES_ON_COMMITTEE]->(defense_ind:Industry {name: "Aerospace & Defense"})
-MATCH (senator)-[:DISCLOSED_TRADE]->(trade:CongressionalTrade)-[:INVOLVES]->(defense_co:Company)
-MATCH (defense_co)-[:OPERATES_IN]->(defense_ind)
-
-// Is there relevant legislation?
-OPTIONAL MATCH (legislation:Legislation)-[affects:AFFECTS]->(defense_ind)
-WHERE legislation.status IN ['committee', 'passed_house', 'passed_senate']
-  AND date(legislation.last_action_date) > date(trade.transaction_date) - duration({days: 180})
-  
-// Who supplies this defense contractor? (supply chain exposure)
-OPTIONAL MATCH (supplier:Company)-[supplies:SUPPLIES_TO]->(defense_co)
-WHERE supplies.dependency_level IN ['critical', 'important']
-  AND supplies.confidence > 0.8
-
-// Are top institutions also buying? (smart money corroboration)
-OPTIONAL MATCH (institution:InstitutionalHolder)-[holds:HOLDS_POSITION]->(defense_co)
-WHERE holds.quarter = "Q4-2025"
-  AND holds.position_type IN ['new', 'increased']
-  AND institution.aum_usd > 50000000000  // Only top-tier funds (>$50B AUM)
-
-RETURN senator.name AS legislator,
-       serves.committee_name AS committee,
-       serves.role AS committee_role,
-       defense_co.ticker AS company,
-       defense_co.name AS company_name,
-       trade.transaction_type AS trade_type,
-       trade.transaction_date AS trade_date,
-       trade.amount_range_high / 1000 AS trade_amount_thousands,
-       
-       // Legislation context
-       COLLECT(DISTINCT {
-         bill: legislation.bill_id,
-         title: legislation.title,
-         status: legislation.status,
-         impact: affects.direction,
-         impact_type: affects.impact_type
-       }) AS related_legislation,
-       
-       // Supply chain exposure (2nd order impact)
-       COLLECT(DISTINCT {
-         supplier: supplier.ticker,
-         supplies: supplies.product_category,
-         dependency: supplies.dependency_level,
-         is_sole_source: supplies.is_sole_source
-       }) AS critical_suppliers,
-       
-       // Institutional corroboration
-       COLLECT(DISTINCT {
-         fund: institution.name,
-         position_change: holds.position_type,
-         value_millions: holds.value_usd / 1000000
-       }) AS institutional_activity,
-       
-       // Signal strength assessment
-       CASE
-         WHEN SIZE(related_legislation) > 0 AND SIZE(institutional_activity) > 0
-           THEN 'STRONG SIGNAL - committee position + pending legislation + institutional buying'
-         WHEN SIZE(related_legislation) > 0
-           THEN 'MODERATE SIGNAL - committee position + pending legislation'
-         WHEN SIZE(institutional_activity) > 0
-           THEN 'MODERATE SIGNAL - committee insider + smart money alignment'
-         ELSE 'WEAK SIGNAL - isolated trade, no corroboration'
-       END AS signal_strength
-
-LIMIT 1
-```
+> Requires Phase 3+4 data. Query pattern TBD. See the full example in git history for the intended structure once those phases are implemented.
 
 ### "Find companies with shared board members (interlock analysis)"
 
@@ -1032,40 +621,25 @@ ORDER BY company_a, company_b
 ## Indexes
 
 ```cypher
-// Unique constraints
+// Phase 1 unique constraints (SEC-sourced nodes)
 CREATE CONSTRAINT ON (c:Company) ASSERT c.ticker IS UNIQUE
 CREATE CONSTRAINT ON (c:Company) ASSERT c.cik IS UNIQUE
 CREATE CONSTRAINT ON (f:Filing) ASSERT f.accession_number IS UNIQUE
-CREATE CONSTRAINT ON (n:NewsArticle) ASSERT n.article_id IS UNIQUE
-CREATE CONSTRAINT ON (l:Legislator) ASSERT l.bioguide_id IS UNIQUE
-CREATE CONSTRAINT ON (t:CongressionalTrade) ASSERT t.disclosure_id IS UNIQUE
-CREATE CONSTRAINT ON (leg:Legislation) ASSERT leg.bill_id IS UNIQUE
-CREATE CONSTRAINT ON (gc:GovernmentContract) ASSERT gc.contract_id IS UNIQUE
-CREATE CONSTRAINT ON (ih:InstitutionalHolder) ASSERT ih.cik IS UNIQUE
 
 // Full-text search indexes
 CALL db.idx.fulltext.createNodeIndex('company_search', 'Company', 'name', 'description')
-CALL db.idx.fulltext.createNodeIndex('news_search', 'NewsArticle', 'title', 'summary')
 CALL db.idx.fulltext.createNodeIndex('filing_search', 'Filing', 'summary')
-CALL db.idx.fulltext.createNodeIndex('legislation_search', 'Legislation', 'title', 'summary')
-CALL db.idx.fulltext.createNodeIndex('legislator_search', 'Legislator', 'name')
 
 // Vector indexes (for semantic search)
-// Company description embeddings
 CREATE VECTOR INDEX FOR (c:Company) ON (c.embedding)
-// News article embeddings  
-CREATE VECTOR INDEX FOR (n:NewsArticle) ON (n.embedding)
-// Filing summary embeddings
 CREATE VECTOR INDEX FOR (f:Filing) ON (f.summary_embedding)
-// Legislation embeddings
-CREATE VECTOR INDEX FOR (leg:Legislation) ON (leg.embedding)
 
 // Range indexes for time-based queries
 CREATE INDEX FOR (f:Filing) ON (f.filed_date)
-CREATE INDEX FOR (n:NewsArticle) ON (n.published_date)
-CREATE INDEX FOR (t:CongressionalTrade) ON (t.transaction_date)
-CREATE INDEX FOR (t:CongressionalTrade) ON (t.disclosure_date)
-CREATE INDEX FOR (leg:Legislation) ON (leg.last_action_date)
+
+// Future phases will add constraints for:
+// NewsArticle, Legislator, CongressionalTrade, Legislation,
+// GovernmentContract, InstitutionalHolder, MacroIndicator
 ```
 
 ---
@@ -1079,7 +653,7 @@ Financial time series data lives in **DuckDB** — an embedded columnar analytic
 | **Data** | Relationships, entities, latest snapshot metrics | Full historical time series (40+ quarters) |
 | **Query pattern** | Multi-hop traversal, entity discovery, screening | Trend analysis, growth rates, peer comparison, window functions |
 | **Scale** | 800K+ nodes, 3M+ edges, ~16 GB in-memory budget | 4M+ rows on disk, columnar compression |
-| **Storage** | In-memory (Redis protocol) | On-disk file (`data/financial_timeseries.duckdb`) |
+| **Storage** | In-memory (Redis protocol) | On-disk file (`data/duckdb/financial_timeseries.duckdb`) |
 | **Why** | Graph traversals and relationship queries | Analytical aggregations, YoY/QoQ growth, moving averages, CAGR |
 
 ### Why not keep everything in FalkorDB?

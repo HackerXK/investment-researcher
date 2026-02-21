@@ -70,10 +70,11 @@ for record in result.result_set:
 
 ### Memory Sizing
 - **Estimate**: ~1KB per node, ~0.5KB per relationship (with properties)
-- **5,000 companies + legislators + institutions + all relationships + metrics**: ~800K nodes, ~3M+ relationships
-- **Estimated RAM**: 3-6 GB for graph data + 2-4 GB for vector indexes
+- **At full build (5,000 companies + legislators + institutions + all relationships + metrics)**: ~800K nodes, ~3M+ relationships
+- **Phase 1 (SEC-only, ~50 companies)**: ~5K nodes, ~20K relationships — well within 1 GB
+- **Estimated RAM (full build)**: 3-6 GB for graph data + 2-4 GB for vector indexes
 - **Recommendation**: Set `--maxmemory 16gb`, monitor with FalkorDB UI
-- **Growth note**: Congressional trades + 13F holdings + government contracts add significant node/relationship volume over time
+- **Growth note**: Congressional trades + 13F holdings + government contracts (Phase 3–5) add significant node/relationship volume over time
 
 ---
 

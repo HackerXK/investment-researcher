@@ -169,7 +169,7 @@ Quiver has already parsed, ticker-matched, and aggregated many of the same raw g
 | **Fetch Method** | Extract SIC code from EDGAR company submissions (`data.sec.gov/submissions/CIK{cik}.json` → `sic` field). Map SIC to sector/industry using standard SIC tables. Alternatively, use FMP profiles for GICS classification |
 | **Key Data** | SIC code, SIC description, sector, industry group |
 | **Graph Nodes** | `Industry`, `Sector` |
-| **Relationships** | `OPERATES_IN` (Company → Industry), `PART_OF` (Industry → Sector) |
+| **Relationships** | `OPERATES_IN` (Company → Industry), `BELONGS_TO` (Industry → Sector) |
 | **Notes** | SIC codes from EDGAR are the authoritative classification for SEC-registered companies. GICS (Global Industry Classification Standard) from FMP is more commonly used in investment analysis. Seed the graph with both |
 
 ### Cadence
@@ -330,7 +330,7 @@ This pipeline covers company-level financial data (Tier 0) and macro-economic in
    └── BLS: Detailed labor market data
    └── BEA: GDP components, international trade, personal income
    └── Map to MacroIndicator nodes linked to Region nodes
-   └── Enrich Region nodes with GDP, credit ratings, debt ratios
+   └── Create MacroIndicator nodes linked to Region nodes (Region stays identifier-only — see 02-graph-schema.md)
 
 5. Load into FalkorDB
    └── MERGE MacroIndicator nodes (keyed on name+date+region)
@@ -853,7 +853,7 @@ These add depth and breadth to the graph. Build only after Tiers 0-2 are working
 | **Fetch Method** | Download and parse proxy statements. LLM extraction for executive names, compensation, board members, shareholder proposals |
 | **Key Data** | Named executive officers, compensation breakdown, board of directors, shareholder proposals, voting results |
 | **Graph Nodes** | `Person` (executives, directors), `Company` |
-| **Relationships** | `HAS_EXECUTIVE`, `BOARD_MEMBER_OF` |
+| **Relationships** | `HAS_EXECUTIVE`, `HAS_BOARD_MEMBER` |
 | **Notes** | Useful for mapping the executive/board network. Directors who sit on multiple boards create relationship edges between companies. Executive compensation outliers can signal governance issues |
 
 ---

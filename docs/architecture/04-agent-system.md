@@ -149,7 +149,7 @@ ripple_effect_agent = Agent(
     
     1. Identify the primary affected company/industry
     2. Traverse the knowledge graph to find connected entities:
-       - Supply chain (SUPPLIES_TO, CUSTOMER_OF) — up to 3 hops
+       - Supply chain (SUPPLIES_TO — traverse in reverse for customers) — up to 3 hops
        - Shared leadership (HAS_EXECUTIVE, HAS_BOARD_MEMBER) — up to 2 hops
        - Competitive dynamics (COMPETES_WITH) — direct competitors
        - Financial ties (OWNS_STAKE_IN, PARTNER_WITH, JOINT_VENTURE_WITH)
@@ -519,7 +519,7 @@ import duckdb
 # ingestion cycle completes and the agent runner restarts).
 @lru_cache(maxsize=1000)
 def _fetch_financial_history(ticker: str, metric: str, quarters: int) -> list[dict]:
-    con = duckdb.connect("data/financial_timeseries.duckdb", read_only=True)
+    con = duckdb.connect("data/duckdb/financial_timeseries.duckdb", read_only=True)
     rows = con.execute("""
         SELECT
             period,

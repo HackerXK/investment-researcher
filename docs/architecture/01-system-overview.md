@@ -43,19 +43,25 @@ A **one-person institutional research desk** that maintains a living knowledge g
 │  ┌───────────────────────────────────────────────────────────────────┐  │
 │  │                        FalkorDB                                   │  │
 │  │                                                                   │  │
-│  │  Nodes: Company, Person, Filing, NewsArticle, Industry,           │  │
-│  │         Sector, MacroIndicator, Region,                           │  │
-│  │         Legislator, CongressionalTrade, Legislation,              │  │
-│  │         InstitutionalHolder, GovernmentContract, Commodity,       │  │
-│  │         ResearchReport                                           │  │
+│  │  Phase 1 (SEC-only):                                              │  │
+│  │    Nodes: Company, Person, Filing, Industry, Sector, Region       │  │
+│  │    Rels:  SUPPLIES_TO, COMPETES_WITH, HAS_EXECUTIVE,              │  │
+│  │           HAS_BOARD_MEMBER, OPERATES_IN, BELONGS_TO,              │  │
+│  │           FILED, OWNS_STAKE_IN, PARTNER_WITH,                     │  │
+│  │           JOINT_VENTURE_WITH, MERGED_WITH, HEADQUARTERED_IN       │  │
 │  │                                                                   │  │
-│  │  Relationships: SUPPLIES_TO, COMPETES_WITH, HAS_EXECUTIVE,        │  │
-│  │    OPERATES_IN, FILED, MENTIONED_IN, OWNS_STAKE_IN,              │  │
-│  │    DISCLOSED_TRADE, HOLDS_POSITION, AWARDED_CONTRACT,            │  │
-│  │    AFFECTS_INDUSTRY, SPONSORED_BY, REPORTS_INDICATOR, ...        │  │
+│  │  Future phases add:                                               │  │
+│  │    Nodes: NewsArticle, MacroIndicator, Commodity,                 │  │
+│  │           Legislator, CongressionalTrade, Legislation,            │  │
+│  │           InstitutionalHolder, GovernmentContract,                │  │
+│  │           ResearchReport                                         │  │
+│  │    Rels:  MENTIONED_IN, DISCLOSED_TRADE, HOLDS_POSITION,         │  │
+│  │           AWARDED_CONTRACT, AFFECTS_INDUSTRY, DEPENDS_ON, ...    │  │
 │  │                                                                   │  │
 │  │  Indexes: Full-text, Vector (embeddings), Range (dates/metrics)   │  │
 │  └───────────────────────────────────────────────────────────────────┘  │
+│                                                                         │
+│  See 02-graph-schema.md for current phase scope and future stubs.       │
 └─────────────────────────┬───────────────────────────────────────────────┘
                           │
                           ▼
@@ -185,7 +191,7 @@ across 5,000+ entities). See [00-strategic-rationale.md](00-strategic-rationale.
 
 | Requirement | Target |
 |-------------|--------|
-| **Graph size** | 5,000+ companies, ~600 legislators, ~1,000+ institutional holders, ~500K+ nodes, ~2M+ relationships |
+| **Graph size** | 5,000+ companies, ~800K+ nodes, ~3M+ relationships (at full build). Phase 1: ~50 companies (SEC-only). Future phases add ~600 legislators, ~1,000+ institutional holders |
 | **News latency** | < 30 min from publication to graph |
 | **Filing latency** | < 24 hours from EDGAR publication |
 | **Agent response (CLI)** | < 30 seconds for typical queries |
