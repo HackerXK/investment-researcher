@@ -327,7 +327,14 @@ Hedge funds, mutual funds, pension funds, and other institutional investors that
   // ── Risk indicators ─────────────────────────────────────────────────────
   geographic_risk: STRING,     -- "Taiwan", "China", "Multi-region" (supply chain risk)
   alternative_suppliers: INT,  -- Number of known alternatives (0 = sole source)
-  lead_time_weeks: INT         -- Typical order-to-delivery time
+  lead_time_weeks: INT,        -- Typical order-to-delivery time
+
+  // ── LLM narrative ───────────────────────────────────────────────────────
+  description: STRING          -- LLM-generated plain-English summary of this specific
+                               --  supply relationship, e.g. "TSMC is Apple's sole-source
+                               --  manufacturer for A-series and M-series SoCs using 3nm/5nm
+                               --  processes. No qualified alternative exists. Estimated
+                               --  $20B+ annual spend per analyst estimates."
 }]->(:Company)
 
 (:Company)-[:CUSTOMER_OF]->(:Company)  // Inverse of SUPPLIES_TO (auto-created)
@@ -351,7 +358,14 @@ Hedge funds, mutual funds, pension funds, and other institutional investors that
   differentiation: STRING,     -- "price", "performance", "ecosystem", "integration"
   competitive_moat: STRING,    -- "patent portfolio", "brand", "network effects"
   threat_level: STRING,        -- "existential" | "significant" | "moderate" | "low"
-  
+
+  // ── LLM narrative ───────────────────────────────────────────────────────
+  description: STRING,         -- LLM-generated summary of competitive dynamics between
+                               --  this specific pair, e.g. "AMD directly competes with
+                               --  NVIDIA in data center GPUs (H100 vs MI300X) but does
+                               --  not compete in networking or robotics. AMD has ~15%
+                               --  share vs NVIDIA's ~80% in AI accelerators as of 2025."
+
   valid_from: STRING
 }]->(:Company)
 
@@ -362,14 +376,21 @@ Hedge funds, mutual funds, pension funds, and other institutional investors that
   value_usd: FLOAT,
   source: STRING,
   valid_from: STRING,
-  valid_to: STRING
+  valid_to: STRING,
+  description: STRING          -- LLM-generated context, e.g. "Berkshire acquired a ~6%
+                               --  stake in TSMC in Q3 2022 then exited in Q1 2023, citing
+                               --  geopolitical concerns around Taiwan."
 }]->(:Company)
 
 (:Company)-[:ACQUIRED {
   acquisition_date: STRING,
   deal_value_usd: FLOAT,
   deal_type: STRING,           -- "cash", "stock", "mixed"
-  status: STRING               -- "completed", "pending", "failed"
+  status: STRING,              -- "completed", "pending", "failed"
+  description: STRING          -- LLM-generated context, e.g. "Microsoft acquired Activision
+                               --  Blizzard for $68.7B in cash (Jan 2023) after an 18-month
+                               --  FTC battle. Rationale: gaming content for Xbox Game Pass
+                               --  and access to mobile gaming via King."
 }]->(:Company)
 
 (:Company)-[:MERGED_WITH {
@@ -381,7 +402,9 @@ Hedge funds, mutual funds, pension funds, and other institutional investors that
   jv_name: STRING,
   purpose: STRING,
   valid_from: STRING,
-  valid_to: STRING
+  valid_to: STRING,
+  description: STRING          -- LLM-generated context beyond the purpose field, e.g.
+                               --  revenue share terms, strategic rationale, known tensions
 }]->(:Company)
 
 (:Company)-[:PARTNER_WITH {
@@ -402,7 +425,11 @@ Hedge funds, mutual funds, pension funds, and other institutional investors that
   compensation_usd: FLOAT,    -- Most recent disclosed compensation
   stock_ownership_pct: FLOAT, -- % of company owned by this executive
   source: STRING,             -- "DEF 14A 2024", "Press release"
-  last_confirmed: STRING
+  last_confirmed: STRING,
+  description: STRING         -- LLM-generated context, e.g. "Tim Cook has served as Apple
+                              --  CEO since August 2011, succeeding Steve Jobs. Known for
+                              --  supply chain expertise and expanding Apple's services
+                              --  revenue from ~$20B to $85B+."
 }]->(:Person)
 
 (:Company)-[:HAS_BOARD_MEMBER {
@@ -413,7 +440,9 @@ Hedge funds, mutual funds, pension funds, and other institutional investors that
   end_date: STRING,           -- null if currently serving
   stock_ownership_shares: INT,-- Shares owned
   source: STRING,             -- "DEF 14A 2024"
-  last_confirmed: STRING
+  last_confirmed: STRING,
+  description: STRING         -- LLM-generated context, e.g. notable background, why they
+                              --  were appointed, any known conflicts or activist pressure
 }]->(:Person)
 ```
 
@@ -526,7 +555,11 @@ Hedge funds, mutual funds, pension funds, and other institutional investors that
   committee_name: STRING,      -- "Financial Services", "Armed Services"
   role: STRING,                -- "chair", "ranking_member", "member"
   start_date: STRING,
-  end_date: STRING
+  end_date: STRING,
+  description: STRING          -- LLM-generated context on oversight scope, e.g. "As Chair
+                               --  of the Senate Armed Services Committee, sets DoD
+                               --  procurement budget priorities and has oversight over
+                               --  all major defense contracts exceeding $100M."
 }]->(:Industry)                -- Committee mapped to the industries it oversees
 ```
 
@@ -537,7 +570,12 @@ Hedge funds, mutual funds, pension funds, and other institutional investors that
   impact_type: STRING,         -- "regulatory", "tax", "subsidy", "tariff", "ban"
   direction: STRING,           -- "positive", "negative", "neutral"
   confidence: FLOAT,           -- 0.0-1.0
-  source: STRING               -- "llm_analysis", "expert", "news"
+  source: STRING,              -- "llm_analysis", "expert", "news"
+  description: STRING          -- LLM-generated explanation of the specific mechanism, e.g.
+                               --  "CHIPS Act §103 provides $52B in domestic fab subsidies.
+                               --  Direct beneficiaries: Intel (Ohio fab), TSMC (Arizona).
+                               --  Estimated margin improvement: 200-400bps for qualifying
+                               --  capex over 5-year depreciation window."
 }]->(:Industry)
 
 (:Legislation)-[:AFFECTS]->(:Company)  // Direct company impact (e.g., government contracts)
@@ -625,12 +663,15 @@ This is what separates institutional-grade research from surface-level analysis.
 |----------|------------------|----------------------|-------------|
 | `confidence` | ✓ Manual estimate | LLM multi-source scoring | Filing text + news corroboration |
 | `source` | ✓ "10-K 2024" | Full citation with page | XBRL metadata + document parser |
+| `description` | ✓ Hand-written for seed edges | LLM-generated at ingestion time | Source paragraph(s) the relationship was extracted from — passed as context to the LLM |
 | `product_category` | ✓ Hand-coded | LLM extraction | "Principal Suppliers" section |
 | `dependency_level` | ✓ Domain knowledge | LLM + keyword detection | "Risk Factors" mentions of "sole source", "critical" |
 | `is_sole_source` | ✓ Known facts | Regex + LLM confirmation | "Sole source", "single supplier" in 10-K |
 | `contract_value_usd` | Manual (if public) | Scrape from earnings calls | Transcript parsing + UMM disambiguation |
 | `market_segment` | ✓ Industry taxonomy | LLM extraction | 10-K "Competition" section |
 | `geographic_overlap` | Industry knowledge | Company "Geographic Revenue" sections | 10-K Item 1, segment reporting |
+
+> **`description` generation rule**: At ingestion time, pass the **source passage** (the paragraph from the 10-K, earnings call excerpt, or news article) directly to the LLM and ask it to write a 2–4 sentence synthesis specific to this entity pair. Do **not** generate from structured fields alone — the description should add information beyond what the structured properties already capture. Store the source passage in the `source` field for provenance.
 
 ### Edge Property Validation Rules
 
