@@ -67,7 +67,7 @@ Foundation   Extraction   Data         Enrichment   System       Automate     Ex
 - **Entity and relationship extraction**: LLM-based extraction from filing text → rich graph nodes and edges
 - **XBRL financial data**: Structured extraction of revenue, net income, EPS from filing XBRL
 - OpenAI API primary; optionally test local LLM on RTX 5090 (Qwen 2.5 32B) for extraction quality comparison
-- Minimal infrastructure (FalkorDB + CLI on AMD workstation)
+- Minimal infrastructure (FalkorDB + DuckDB + CLI on AMD workstation)
 - **Full production structure from day one** — scope is narrow, but code is in its final home
 
 ### Tasks
@@ -79,6 +79,7 @@ Foundation   Extraction   Data         Enrichment   System       Automate     Ex
 - [ ] `src/investment_researcher/config.py` — env var loading (Phase 1 expands, never replaces)
 - [ ] `src/investment_researcher/graph/connection.py` — FalkorDB connection + health check (Phase 1 adds retry logic)
 - [ ] `src/investment_researcher/graph/schema.py` — **MUST implement exactly per [02-graph-schema.md](02-graph-schema.md) § Core Node Types and § Core Relationships**. Node types: Company (all 20+ properties including `ticker`, `cik`, `name`, `legal_name`, `market_cap`, `revenue_ttm`, `pe_ratio`, `embedding`, etc.), Person (`name`, `title`, `bio`, `linkedin_url`, `last_updated`), Filing (`accession_number`, `form_type`, `filed_date`, `period_of_report`, `filing_url`, `summary`, `key_topics`, `sentiment`, `summary_embedding`, `processed`), Industry (`name`, `gics_code`, `description`, `last_updated`), Sector (`name`, `gics_code`, `description`), Region (`name`, `region_type`, `iso_code`, `last_updated`). **Do NOT invent properties or omit properties — use the exact property names and types from the schema doc.** Indexes per § Indexes. Phase 1 adds full relationship schema + auto-extension via GraphRAG-SDK
+- [ ] `src/investment_researcher/ingestion/timeseries.py` — DuckDB writer module: initialize `data/duckdb/financial_timeseries.duckdb` with **exact schema** from [02-graph-schema.md](02-graph-schema.md) § Time Series Data Store (`financial_metrics` table with PK `(ticker, metric_type, period_type, period_end)`; `macro_timeseries` table with PK `(indicator_id, date)`). Expose `write_financial_metrics()` and `recompute_snapshot()` — Phase 2 reuses this module for FMP/FRED data without changes
 - [ ] `cli.py` — Typer CLI with `chat` and `ingest` commands (Phase 1 adds `health` — same file throughout)
 - [ ] `README.md` — developer guide covering: project setup, common CLI commands, how to access and query each database (FalkorDB, SQLite, DuckDB) for debugging, and a map of the `src/investment_researcher/` module structure
 
@@ -101,7 +102,8 @@ Foundation   Extraction   Data         Enrichment   System       Automate     Ex
   - [ ] Industry/sector classification — use SIC from EDGAR submissions JSON, map to Industry/Sector nodes per [03-data-ingestion.md](03-data-ingestion.md) § SIC/NAICS source table. Create OPERATES_IN (with `revenue_pct`, `is_primary`) and BELONGS_TO relationships per [02-graph-schema.md](02-graph-schema.md) § Company ↔ Industry / Sector
   - [ ] Risk factor categorization (geopolitical, regulatory, supply chain, financial)
 - [ ] XBRL parser for structured financial data (revenue, net income, EPS, etc.) — **prefer XBRL over LLM extraction** per [03-data-ingestion.md](03-data-ingestion.md) § XBRL source notes and [02-graph-schema.md](02-graph-schema.md) § Confidence & Data Quality Principles ("prefer structured over extracted")
-  - Write parsed metrics to Filing nodes and Company snapshot properties per [02-graph-schema.md](02-graph-schema.md) § Company snapshot metrics
+  - Write full time series → DuckDB `financial_metrics` table (via `timeseries.py`), `accession` column preserved for provenance, per [02-graph-schema.md](02-graph-schema.md) § Time Series Data Store
+  - Recompute Company snapshot metrics (`revenue_ttm`, `pe_ratio`, `revenue_growth_yoy`, `gross_margin`, etc.) → FalkorDB Company node via `recompute_snapshot()` per [02-graph-schema.md](02-graph-schema.md) § Company snapshot metrics
 - [ ] Filing → FalkorDB loader: create Filing nodes (keyed on `accession_number`), link to Company via `FILED` relationship, populate edge properties. Use MERGE operations per [03-data-ingestion.md](03-data-ingestion.md) § Pipeline 1 step 7
 - [ ] Ingestion state tracking (SQLite) — track which filings have been fetched/parsed/loaded
 - [ ] CLI commands: `ingest edgar --ticker AAPL`, `ingest edgar --list top50`
@@ -110,6 +112,7 @@ Foundation   Extraction   Data         Enrichment   System       Automate     Ex
 > **Implementation spec**: Tool signatures **MUST match** [04-agent-system.md](04-agent-system.md) § Agent Tools — exact function names, parameter names, types, and docstrings. Agent definition **MUST match** [04-agent-system.md](04-agent-system.md) § 3. Ripple Effect Analyzer.
 
 - [ ] `src/investment_researcher/agents/tools/graph_tools.py` — `query_graph(cypher_query: str)`, `get_company_profile(ticker: str)`, `get_related_companies(ticker: str, relationship_types: list[str], max_depth: int)` using OpenAI Agents SDK `@function_tool` — **implement with exact signatures and docstrings from [04-agent-system.md](04-agent-system.md) § Graph Query Tools** (Phase 4 adds `semantic_search_graph`, `get_industry_peers`, and data tools to this same file)
+- [ ] `src/investment_researcher/agents/tools/timeseries_tools.py` — `get_financial_history(ticker: str, metrics: list[str], quarters: int)` querying DuckDB `financial_metrics` table — **MUST match tool signature in [04-agent-system.md](04-agent-system.md) § Data Tools**. Growth rates computed at query time via SQL window functions per [02-graph-schema.md](02-graph-schema.md) § Growth Rate Strategy. Phase 2 expands this tool's usefulness as more data sources populate DuckDB
 - [ ] `src/investment_researcher/agents/definitions/ripple_effect.py` — Ripple Effect Analyzer as a single OpenAI Agents SDK agent. **MUST use the exact `name`, `instructions`, `tools`, and `model` from [04-agent-system.md](04-agent-system.md) § 3. Ripple Effect Analyzer** — including confidence decay rules (0.9/hop), staleness decay, edge property usage instructions, and the "CRITICAL: Use edge properties for nuanced analysis" block (Phase 4 adds Triage, Screener, etc.)
 - [ ] `chat` command routes to Ripple Effect Analyzer for interactive graph exploration
 
@@ -120,7 +123,8 @@ Foundation   Extraction   Data         Enrichment   System       Automate     Ex
 #### Data Extraction Quality
 - [ ] `ingest edgar --ticker AAPL` fetches 10-K filing, extracts entities/relationships, and loads into FalkorDB
 - [ ] Extracted SUPPLIES_TO relationships have rich edge properties: product_category, dependency_level, is_sole_source, source (with accession number)
-- [ ] XBRL parser populates Company nodes with financial metrics: revenue_ttm, net_income, eps
+- [ ] XBRL parser writes financial metrics to DuckDB (`financial_metrics` table) and recomputes Company node snapshots: `revenue_ttm`, `net_income`, `eps`
+- [ ] `SELECT COUNT(*) FROM financial_metrics` → rows present for all ingested companies
 - [ ] Spot-check: compare LLM-extracted supply chain data against manually reading the same 10-K section — extraction should capture the key relationships disclosed in the filing
 - [ ] At least 10 companies with SEC-extracted data in the graph
 
@@ -163,16 +167,20 @@ investment-researcher/
 │       │   │   ├── xbrl.py       ✓  (XBRL financial data extraction)
 │       │   │   └── extractor.py  ✓  (LLM-based entity/relationship extraction from filing text)
 │       │   ├── loader.py         ✓  (Filing → FalkorDB node/edge writer)
+│       │   ├── timeseries.py     ✓  (DuckDB writer: financial_metrics + macro_timeseries tables, recompute_snapshot)
 │       │   └── state.py          ✓  (SQLite ingestion state tracker)
 │       └── agents/
 │           ├── tools/
-│           │   └── graph_tools.py ✓ (query_graph, get_company_profile, get_related_companies — Phase 4 adds to this file)
+│           │   ├── graph_tools.py    ✓  (query_graph, get_company_profile, get_related_companies — Phase 4 expands)
+│           │   └── timeseries_tools.py ✓  (get_financial_history — queries DuckDB; Phase 4 expands)
 │           └── definitions/
 │               └── ripple_effect.py ✓ (single OpenAI Agents SDK agent — Phase 4 adds more agents here)
 ├── cli.py                        ✓  (Typer: chat, ingest edgar — Phase 1 adds health)
 ├── README.md                     ✓  (setup, CLI usage, database debugging guide)
 ├── data/
 │   ├── falkordb/                 ✓  (bind mount target — consistent with Phase 1+)
+│   ├── duckdb/
+│   │   └── financial_timeseries.duckdb ✓  (financial_metrics + macro_timeseries tables, seeded from XBRL)
 │   └── raw/filings/              ✓  (downloaded SEC filings — HTML/XML)
 └── docs/data-quality-report.md   ✓  (SEC extraction accuracy, spot-check results)
 ```
@@ -243,26 +251,15 @@ cli.py                        ← Phase 0 (expanded: health command added)
 
 ## Phase 2: Data Ingestion MVP (Week 6-8)
 
-**Goal**: Scale SEC EDGAR pipeline from Phase 0's initial 50 companies to ~100. Add DuckDB time series store, financial data API pipelines, and macro indicators. The SEC EDGAR pipeline (fetcher, parser, XBRL, extractor) already exists from Phase 0 — this phase is about scaling it and adding complementary data sources.
+**Goal**: Scale SEC EDGAR pipeline from Phase 0's initial 50 companies to ~100. Add financial data API pipelines (FMP) and macro indicators (FRED). DuckDB is already initialized with its full schema in Phase 0 — this phase adds new ingestion pipelines that write to the existing store.
 
 ### Tasks
-> **Implementation spec**: DuckDB schema **MUST match exactly** [02-graph-schema.md](02-graph-schema.md) § Time Series Data Store (DuckDB) — table names, column names, types, primary keys. Financial data pipeline **MUST follow** [03-data-ingestion.md](03-data-ingestion.md) § Pipeline 2: Financial Data APIs. Growth rates are **computed at query time** via SQL window functions, NOT precomputed — see [02-graph-schema.md](02-graph-schema.md) § Growth Rate Strategy.
+> **Implementation spec**: Financial data pipeline **MUST follow** [03-data-ingestion.md](03-data-ingestion.md) § Pipeline 2: Financial Data APIs. DuckDB schema was established in Phase 0 — all writes here use the same `timeseries.py` module via `write_financial_metrics()`. Growth rates are **computed at query time** via SQL window functions, NOT precomputed — see [02-graph-schema.md](02-graph-schema.md) § Growth Rate Strategy.
 
-- [ ] **DuckDB time series store setup per [02-graph-schema.md](02-graph-schema.md) § Time Series Data Store**:
-  - [ ] Initialize `data/duckdb/financial_timeseries.duckdb` with **exact schema** from [02-graph-schema.md](02-graph-schema.md) § DuckDB Schema
-  - [ ] `financial_metrics` table: columns `ticker VARCHAR NOT NULL`, `cik VARCHAR`, `metric_type VARCHAR NOT NULL`, `value DOUBLE NOT NULL`, `currency VARCHAR DEFAULT 'USD'`, `period VARCHAR NOT NULL`, `period_type VARCHAR NOT NULL`, `period_end DATE NOT NULL`, `source VARCHAR`, `accession VARCHAR`, `ingested_at TIMESTAMP` — PK: `(ticker, metric_type, period_type, period_end)`
-  - [ ] `macro_timeseries` table: columns `indicator_id VARCHAR NOT NULL`, `name VARCHAR NOT NULL`, `value DOUBLE NOT NULL`, `unit VARCHAR`, `date DATE NOT NULL`, `source VARCHAR`, `ingested_at TIMESTAMP` — PK: `(indicator_id, date)`
-  - [ ] Snapshot recompute logic: DuckDB window functions → FalkorDB Company node snapshot properties (`revenue_ttm`, `revenue_growth_yoy`, `eps_ttm`, `pe_ratio`, `gross_margin`, `debt_to_equity`, `free_cash_flow_ttm`, `metrics_as_of`) per [02-graph-schema.md](02-graph-schema.md) § Company node
-  - [ ] `get_financial_history` tool with `lru_cache` — **MUST match tool signature in [04-agent-system.md](04-agent-system.md) § Data Tools**: `get_financial_history(ticker: str, metrics: list[str], quarters: int)`. Growth rates computed at query time via SQL window functions per [02-graph-schema.md](02-graph-schema.md) § Growth Rate Strategy
-- [ ] SEC EDGAR pipeline — **scale from Phase 0**:
-  - [ ] ~~Company CIK/ticker lookup from EDGAR company index~~ ✅ Phase 0
-  - [ ] ~~Filing fetcher (10-K, 10-Q, 8-K for tracked companies)~~ ✅ Phase 0
-  - [ ] ~~MarkItDown conversion for filing HTML~~ ✅ Phase 0
+- [ ] SEC EDGAR pipeline — **scale from Phase 0** (fetcher, parser, XBRL, DuckDB write, and snapshot recompute already exist):
   - [ ] Scale extraction to S&P 100 companies
   - [ ] Improve extraction prompts based on Phase 0 accuracy results
   - [ ] GraphRAG-SDK entity extraction from filings (augment LLM-based extraction from Phase 0)
-  - [ ] ~~XBRL parser for structured financial data~~ ✅ Phase 0
-  - [ ] Write financial metrics → DuckDB (`financial_metrics` table, `accession` column for provenance); recompute snapshot → FalkorDB Company node properties
 - [ ] Financial data pipeline **per [03-data-ingestion.md](03-data-ingestion.md) § Pipeline 2: Financial Data APIs**:
   - [ ] FMP or Polygon.io integration — use source table in [03-data-ingestion.md](03-data-ingestion.md) § Financial Modeling Prep for API endpoints, pricing tiers, and rate limits
   - [ ] Fundamental data fetcher (market cap, P/E, EPS, etc.)

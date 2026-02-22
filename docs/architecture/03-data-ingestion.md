@@ -1264,8 +1264,9 @@ If the platform evolves to consume **push-based / webhook feeds** (e.g., EDGAR's
 
 ### Phase 0 (Data Foundation — 50 companies, 2-3 weeks)
 1. **EDGAR** — 10-K, 10-Q for 50 semiconductor companies (fetch, parse, LLM-extract entities/relationships)
-2. **EDGAR XBRL** — Financial metrics for those 50 companies
-3. **FMP (free tier)** — Company profiles, prices, sector/industry (optional, lower priority than SEC extraction)
+2. **EDGAR XBRL** — Financial metrics for those 50 companies → written to DuckDB `financial_metrics` table (via `timeseries.py`); latest snapshot recomputed onto FalkorDB Company nodes
+3. **DuckDB initialization** — `financial_timeseries.duckdb` created with full schema (`financial_metrics` + `macro_timeseries`) during Phase 0 infrastructure setup. Phase 2 pipelines (FMP, FRED) write to this same store without schema changes
+4. **FMP (free tier)** — Company profiles, prices, sector/industry (optional, lower priority than SEC extraction)
 
 ### Phase 1-2 (Core graph — 500 companies)
 5. **EDGAR XBRL bulk download** — All company financials
