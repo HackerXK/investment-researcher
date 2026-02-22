@@ -2,6 +2,40 @@
 
 > **Core principle — data quality first**: The project's success hinges on the quality of the data and our ability to extract, structure, and store it. Early phases focus on SEC filing extraction and data pipeline quality, not on validating whether the graph concept works (it obviously does when populated with quality data). See [00-strategic-rationale.md](00-strategic-rationale.md) for the full strategic analysis.
 
+---
+
+## Specification Authority — Binding Document References
+
+> **This section establishes binding relationships between this roadmap and the detailed design documents.** When implementing any task in this roadmap, the referenced design docs are **authoritative specifications, not optional reading**. If a task says "per 02-graph-schema.md", the implementation **MUST** match the schema defined there — do not invent properties, rename fields, change types, or omit fields that the spec defines.
+
+### Document Hierarchy
+
+| Document | Authority Over | How to Use |
+|----------|---------------|------------|
+| [02-graph-schema.md](02-graph-schema.md) | All node types, node properties, relationship types, relationship edge properties, indexes, DuckDB schema, temporal modeling, confidence/staleness rules | **Copy property lists verbatim** when implementing nodes/edges. Do not add, remove, or rename properties unless the spec changes first |
+| [03-data-ingestion.md](03-data-ingestion.md) | Pipeline architecture, source URLs/APIs, rate limits, data flow (Source → DuckDB → FalkorDB snapshot), entity resolution strategy, tier classification | **Follow pipeline steps exactly** as numbered. Use the specified APIs, endpoints, and field mappings |
+| [04-agent-system.md](04-agent-system.md) | Agent definitions (names, instructions, tools, handoffs, model assignments), tool function signatures, report schema, investment decision workflow | **Use the exact agent names, tool signatures, and instruction text** defined there. The Python code blocks are implementation specs, not pseudocode |
+| [00-strategic-rationale.md](00-strategic-rationale.md) | Hypothesis framing, bear case requirements, confidence principles, data quality philosophy | Every agent output and report format must enforce these principles |
+| [05-tech-stack.md](05-tech-stack.md) | Library choices, framework versions, infrastructure decisions | Use the specified libraries and versions. Do not substitute without updating the spec first |
+
+### Implementation Rules
+
+1. **Schema is law**: When a task says to create a node type (e.g., Company, Filing, Person), implement it with **every property listed** in [02-graph-schema.md](02-graph-schema.md) § Core Node Types. Do not invent new properties or omit existing ones.
+
+2. **Edge properties are mandatory**: Relationship types in [02-graph-schema.md](02-graph-schema.md) § Core Relationships define rich edge properties (e.g., SUPPLIES_TO has 15+ properties including `product_category`, `dependency_level`, `is_sole_source`, `geographic_risk`, etc.). Implement **all specified properties**. These are what differentiate institutional-grade analysis from surface-level outputs.
+
+3. **DuckDB schema is exact**: The `financial_metrics` and `macro_timeseries` table schemas in [02-graph-schema.md](02-graph-schema.md) § Time Series Data Store define exact column names, types, and primary keys. Use them verbatim.
+
+4. **Agent definitions are specs**: The Python code blocks in [04-agent-system.md](04-agent-system.md) § Agent Definitions are implementation specifications. Use the exact `name`, `instructions`, `tools` list, `handoffs` list, and `model` assignment for each agent.
+
+5. **Tool signatures are contracts**: The `@function_tool` decorated functions in [04-agent-system.md](04-agent-system.md) § Agent Tools define the exact function names, parameter names, parameter types, and docstrings. Implement them as specified.
+
+6. **Pipeline steps are ordered**: The numbered pipeline steps in [03-data-ingestion.md](03-data-ingestion.md) define the exact processing sequence. Follow the step numbers and data flow arrows.
+
+7. **When in doubt, read the spec**: If this roadmap gives a brief task description and the design doc gives a detailed specification, **the design doc wins**. This roadmap defines *what to build and when*; the design docs define *exactly how to build it*.
+
+---
+
 ## Phase Overview
 
 ```
@@ -40,38 +74,42 @@ Foundation   Extraction   Data         Enrichment   System       Automate     Ex
 
 #### Infrastructure & Project Structure
 - [ ] `docker-compose.yml` with FalkorDB only (bind mount `./data/falkordb:/data` — same file Phase 1 extends by adding Langfuse)
-- [ ] `pyproject.toml` with `investment_researcher` package, Typer, OpenAI Agents SDK, FalkorDB client — Phase 1 adds more deps, never restructures
+- [ ] `pyproject.toml` with `investment_researcher` package, Typer, OpenAI Agents SDK, FalkorDB client — Phase 1 adds more deps, never restructures. **MUST use libraries specified in [05-tech-stack.md](05-tech-stack.md)**
 - [ ] `.env.example` (OpenAI key only for now — Phase 1 adds Langfuse, Phase 2 adds data API keys)
 - [ ] `src/investment_researcher/config.py` — env var loading (Phase 1 expands, never replaces)
 - [ ] `src/investment_researcher/graph/connection.py` — FalkorDB connection + health check (Phase 1 adds retry logic)
-- [ ] `src/investment_researcher/graph/schema.py` — core ontology: Company, Person, Industry, Sector, Filing, Region (Phase 1 adds full schema + indexes). See [02-graph-schema.md](02-graph-schema.md) for current scope
+- [ ] `src/investment_researcher/graph/schema.py` — **MUST implement exactly per [02-graph-schema.md](02-graph-schema.md) § Core Node Types and § Core Relationships**. Node types: Company (all 20+ properties including `ticker`, `cik`, `name`, `legal_name`, `market_cap`, `revenue_ttm`, `pe_ratio`, `embedding`, etc.), Person (`name`, `title`, `bio`, `linkedin_url`, `last_updated`), Filing (`accession_number`, `form_type`, `filed_date`, `period_of_report`, `filing_url`, `summary`, `key_topics`, `sentiment`, `summary_embedding`, `processed`), Industry (`name`, `gics_code`, `description`, `last_updated`), Sector (`name`, `gics_code`, `description`), Region (`name`, `region_type`, `iso_code`, `last_updated`). **Do NOT invent properties or omit properties — use the exact property names and types from the schema doc.** Indexes per § Indexes. Phase 1 adds full relationship schema + auto-extension via GraphRAG-SDK
 - [ ] `cli.py` — Typer CLI with `chat` and `ingest` commands (Phase 1 adds `health` — same file throughout)
 
 #### SEC EDGAR Pipeline (Core Development Focus)
-- [ ] Company CIK/ticker lookup from EDGAR company index
+> **Implementation spec**: Follow [03-data-ingestion.md](03-data-ingestion.md) § Pipeline 1: SEC EDGAR — pipeline steps 1-7, source table fields, rate limits, and data flow. All extracted entities and relationships **MUST** conform to [02-graph-schema.md](02-graph-schema.md) property definitions.
+
+- [ ] Company CIK/ticker lookup from EDGAR company index — use `data.sec.gov/submissions/CIK{cik}.json` per [03-data-ingestion.md](03-data-ingestion.md) § Pipeline 1 Sources
 - [ ] Filing fetcher: 10-K, 10-Q, 8-K for target companies (~50 initially)
   - EDGAR SEC-API or direct EDGAR FULL-TEXT search
-  - Rate-limited, polite scraping (10 req/sec max)
+  - Rate-limited, polite scraping (10 req/sec max, `User-Agent` header required per [03-data-ingestion.md](03-data-ingestion.md))
   - Store raw filing HTML/XML in `data/raw/filings/`
 - [ ] Filing preprocessor: HTML → clean markdown (MarkItDown or custom parser)
 - [ ] **LLM-based entity extraction from 10-K text** (the hardest and most valuable task):
   - [ ] Supply chain extraction from "Customers" / "Suppliers" / "Risk Factors" sections
-    - Extract: supplier/customer identity, product_category, dependency_level, is_sole_source
+    - **MUST populate all SUPPLIES_TO edge properties** per [02-graph-schema.md](02-graph-schema.md) § Company ↔ Company: `product_category`, `dependency_level` ("critical"|"important"|"optional"), `is_sole_source`, `contract_value_usd`, `revenue_pct`, `volume_estimate`, `geographic_risk`, `alternative_suppliers`, `lead_time_weeks`, `confidence`, `source`, `last_confirmed`, `created_at`, `valid_from`, `valid_to`, `description` (LLM-generated narrative per § Edge Property Best Practices)
     - Source citation: accession number + section + page
   - [ ] Competitive dynamics from "Competition" section
-    - Extract: competitor identity, market_segment, intensity, differentiation
-  - [ ] Executive/board extraction from filing headers and DEF 14A
-  - [ ] Industry/sector classification
+    - **MUST populate all COMPETES_WITH edge properties** per [02-graph-schema.md](02-graph-schema.md) § Company ↔ Company: `market_segment`, `intensity` ("direct"|"partial"|"adjacent"|"emerging"), `geographic_overlap`, `market_share_a`, `market_share_b`, `differentiation`, `competitive_moat`, `threat_level` ("existential"|"significant"|"moderate"|"low"), `confidence`, `source`, `last_confirmed`, `created_at`, `valid_from`, `description`
+  - [ ] Executive/board extraction from filing headers and DEF 14A — **MUST populate HAS_EXECUTIVE and HAS_BOARD_MEMBER edge properties** per [02-graph-schema.md](02-graph-schema.md) § Company ↔ People: `title`, `start_date`, `end_date`, `compensation_usd`, `stock_ownership_pct`, `source`, `last_confirmed`, `description` (for executives); `role`, `committee`, `is_independent`, `start_date`, `end_date`, `stock_ownership_shares`, `source`, `last_confirmed`, `description` (for board members)
+  - [ ] Industry/sector classification — use SIC from EDGAR submissions JSON, map to Industry/Sector nodes per [03-data-ingestion.md](03-data-ingestion.md) § SIC/NAICS source table. Create OPERATES_IN (with `revenue_pct`, `is_primary`) and BELONGS_TO relationships per [02-graph-schema.md](02-graph-schema.md) § Company ↔ Industry / Sector
   - [ ] Risk factor categorization (geopolitical, regulatory, supply chain, financial)
-- [ ] XBRL parser for structured financial data (revenue, net income, EPS, etc.)
-  - Write parsed metrics to Filing nodes and Company snapshot properties
-- [ ] Filing → FalkorDB loader: create Filing nodes, link to Company, populate edge properties
+- [ ] XBRL parser for structured financial data (revenue, net income, EPS, etc.) — **prefer XBRL over LLM extraction** per [03-data-ingestion.md](03-data-ingestion.md) § XBRL source notes and [02-graph-schema.md](02-graph-schema.md) § Confidence & Data Quality Principles ("prefer structured over extracted")
+  - Write parsed metrics to Filing nodes and Company snapshot properties per [02-graph-schema.md](02-graph-schema.md) § Company snapshot metrics
+- [ ] Filing → FalkorDB loader: create Filing nodes (keyed on `accession_number`), link to Company via `FILED` relationship, populate edge properties. Use MERGE operations per [03-data-ingestion.md](03-data-ingestion.md) § Pipeline 1 step 7
 - [ ] Ingestion state tracking (SQLite) — track which filings have been fetched/parsed/loaded
 - [ ] CLI commands: `ingest edgar --ticker AAPL`, `ingest edgar --list top50`
 
 #### Agent Tools & Basic Agent (For Interactive Querying)
-- [ ] `src/investment_researcher/agents/tools/graph_tools.py` — `query_graph`, `get_company_profile`, `get_related_companies` using OpenAI Agents SDK `@function_tool` (Phase 4 adds more tools to this same file)
-- [ ] `src/investment_researcher/agents/definitions/ripple_effect.py` — Ripple Effect Analyzer as a single OpenAI Agents SDK agent (Phase 4 adds Triage, Screener, etc.)
+> **Implementation spec**: Tool signatures **MUST match** [04-agent-system.md](04-agent-system.md) § Agent Tools — exact function names, parameter names, types, and docstrings. Agent definition **MUST match** [04-agent-system.md](04-agent-system.md) § 3. Ripple Effect Analyzer.
+
+- [ ] `src/investment_researcher/agents/tools/graph_tools.py` — `query_graph(cypher_query: str)`, `get_company_profile(ticker: str)`, `get_related_companies(ticker: str, relationship_types: list[str], max_depth: int)` using OpenAI Agents SDK `@function_tool` — **implement with exact signatures and docstrings from [04-agent-system.md](04-agent-system.md) § Graph Query Tools** (Phase 4 adds `semantic_search_graph`, `get_industry_peers`, and data tools to this same file)
+- [ ] `src/investment_researcher/agents/definitions/ripple_effect.py` — Ripple Effect Analyzer as a single OpenAI Agents SDK agent. **MUST use the exact `name`, `instructions`, `tools`, and `model` from [04-agent-system.md](04-agent-system.md) § 3. Ripple Effect Analyzer** — including confidence decay rules (0.9/hop), staleness decay, edge property usage instructions, and the "CRITICAL: Use edge properties for nuanced analysis" block (Phase 4 adds Triage, Screener, etc.)
 - [ ] `chat` command routes to Ripple Effect Analyzer for interactive graph exploration
 
 ### Validation Criteria
@@ -150,14 +188,14 @@ investment-researcher/
 
 ### Tasks
 - [ ] Expand `docker-compose.yml` — add Langfuse + Postgres services (FalkorDB section unchanged)
-- [ ] Expand `pyproject.toml` — add Langfuse, GraphRAG-SDK, MarkItDown deps
+- [ ] Expand `pyproject.toml` — add Langfuse, GraphRAG-SDK, MarkItDown deps **per [05-tech-stack.md](05-tech-stack.md)**
 - [ ] Expand `.env.example` — add Langfuse keys, workstation config
 - [ ] Expand `src/investment_researcher/graph/connection.py` — add retry logic, connection pooling
-- [ ] Expand `src/investment_researcher/graph/schema.py` — add full schema, all indexes, constraints
-- [ ] Add `src/investment_researcher/graph/ontology.py` — ontology loading + GraphRAG-SDK integration
-- [ ] Add `schemas/core_ontology.json` — hand-crafted core graph ontology
+- [ ] Expand `src/investment_researcher/graph/schema.py` — add full relationship schema with **all edge properties exactly as defined in [02-graph-schema.md](02-graph-schema.md) § Core Relationships** (SUPPLIES_TO: 15+ properties, COMPETES_WITH: 13+ properties, OWNS_STAKE_IN, ACQUIRED, MERGED_WITH, JOINT_VENTURE_WITH, PARTNER_WITH, HAS_EXECUTIVE, HAS_BOARD_MEMBER, OPERATES_IN, BELONGS_TO, HEADQUARTERED_IN, HAS_MARKET_IN, HAS_OPERATIONS_IN, FILED). Add all indexes and constraints per [02-graph-schema.md](02-graph-schema.md) § Indexes
+- [ ] Add `src/investment_researcher/graph/ontology.py` — ontology loading + GraphRAG-SDK integration. Auto-extended relationships stored as RELATED_TO per [02-graph-schema.md](02-graph-schema.md) § Auto-Extended Relationships (with `relationship_detail`, `source_document`, `confidence`, `auto_detected`, `detected_date`)
+- [ ] Add `schemas/core_ontology.json` — hand-crafted core graph ontology **reflecting the exact node types and relationship types in [02-graph-schema.md](02-graph-schema.md)**
 - [ ] Add `src/investment_researcher/observability/setup.py` — Langfuse + OpenInference instrumentation
-- [ ] Add `src/investment_researcher/ingestion/preprocessor.py` — MarkItDown wrapper
+- [ ] Add `src/investment_researcher/ingestion/preprocessor.py` — MarkItDown wrapper per [03-data-ingestion.md](03-data-ingestion.md) § Pipeline Architecture (step 3 in every pipeline)
 - [ ] Expand `cli.py` — add `health` command (chat command already exists from Phase 0)
 - [ ] Manual document upload via CLI (MarkItDown → GraphRAG-SDK → FalkorDB)
 - [ ] **[Optional]** Local LLM inference stack on RTX 5090:
@@ -206,12 +244,14 @@ cli.py                        ← Phase 0 (expanded: health command added)
 **Goal**: Scale SEC EDGAR pipeline from Phase 0's initial 50 companies to ~100. Add DuckDB time series store, financial data API pipelines, and macro indicators. The SEC EDGAR pipeline (fetcher, parser, XBRL, extractor) already exists from Phase 0 — this phase is about scaling it and adding complementary data sources.
 
 ### Tasks
-- [ ] **DuckDB time series store setup**:
-  - [ ] Initialize `data/duckdb/financial_timeseries.duckdb` with schema (see [02-graph-schema.md](02-graph-schema.md) § Time Series Data Store)
-  - [ ] `financial_metrics` table (ticker, metric_type, value, period, period_end, accession)
-  - [ ] `macro_timeseries` table (FRED/WorldBank/BLS indicators)
-  - [ ] Snapshot recompute logic: DuckDB window functions → FalkorDB Company node properties
-  - [ ] `get_financial_history` tool with `lru_cache` (growth rates computed at query time)
+> **Implementation spec**: DuckDB schema **MUST match exactly** [02-graph-schema.md](02-graph-schema.md) § Time Series Data Store (DuckDB) — table names, column names, types, primary keys. Financial data pipeline **MUST follow** [03-data-ingestion.md](03-data-ingestion.md) § Pipeline 2: Financial Data APIs. Growth rates are **computed at query time** via SQL window functions, NOT precomputed — see [02-graph-schema.md](02-graph-schema.md) § Growth Rate Strategy.
+
+- [ ] **DuckDB time series store setup per [02-graph-schema.md](02-graph-schema.md) § Time Series Data Store**:
+  - [ ] Initialize `data/duckdb/financial_timeseries.duckdb` with **exact schema** from [02-graph-schema.md](02-graph-schema.md) § DuckDB Schema
+  - [ ] `financial_metrics` table: columns `ticker VARCHAR NOT NULL`, `cik VARCHAR`, `metric_type VARCHAR NOT NULL`, `value DOUBLE NOT NULL`, `currency VARCHAR DEFAULT 'USD'`, `period VARCHAR NOT NULL`, `period_type VARCHAR NOT NULL`, `period_end DATE NOT NULL`, `source VARCHAR`, `accession VARCHAR`, `ingested_at TIMESTAMP` — PK: `(ticker, metric_type, period_type, period_end)`
+  - [ ] `macro_timeseries` table: columns `indicator_id VARCHAR NOT NULL`, `name VARCHAR NOT NULL`, `value DOUBLE NOT NULL`, `unit VARCHAR`, `date DATE NOT NULL`, `source VARCHAR`, `ingested_at TIMESTAMP` — PK: `(indicator_id, date)`
+  - [ ] Snapshot recompute logic: DuckDB window functions → FalkorDB Company node snapshot properties (`revenue_ttm`, `revenue_growth_yoy`, `eps_ttm`, `pe_ratio`, `gross_margin`, `debt_to_equity`, `free_cash_flow_ttm`, `metrics_as_of`) per [02-graph-schema.md](02-graph-schema.md) § Company node
+  - [ ] `get_financial_history` tool with `lru_cache` — **MUST match tool signature in [04-agent-system.md](04-agent-system.md) § Data Tools**: `get_financial_history(ticker: str, metrics: list[str], quarters: int)`. Growth rates computed at query time via SQL window functions per [02-graph-schema.md](02-graph-schema.md) § Growth Rate Strategy
 - [ ] SEC EDGAR pipeline — **scale from Phase 0**:
   - [ ] ~~Company CIK/ticker lookup from EDGAR company index~~ ✅ Phase 0
   - [ ] ~~Filing fetcher (10-K, 10-Q, 8-K for tracked companies)~~ ✅ Phase 0
@@ -221,13 +261,13 @@ cli.py                        ← Phase 0 (expanded: health command added)
   - [ ] GraphRAG-SDK entity extraction from filings (augment LLM-based extraction from Phase 0)
   - [ ] ~~XBRL parser for structured financial data~~ ✅ Phase 0
   - [ ] Write financial metrics → DuckDB (`financial_metrics` table, `accession` column for provenance); recompute snapshot → FalkorDB Company node properties
-- [ ] Financial data pipeline:
-  - [ ] FMP or Polygon.io integration
+- [ ] Financial data pipeline **per [03-data-ingestion.md](03-data-ingestion.md) § Pipeline 2: Financial Data APIs**:
+  - [ ] FMP or Polygon.io integration — use source table in [03-data-ingestion.md](03-data-ingestion.md) § Financial Modeling Prep for API endpoints, pricing tiers, and rate limits
   - [ ] Fundamental data fetcher (market cap, P/E, EPS, etc.)
-  - [ ] Write time series → DuckDB; recompute latest snapshot → FalkorDB Company node
-- [ ] FRED API integration for starter macro indicators (Fed Funds Rate, CPI, GDP)
-- [ ] World Bank / IMF API integration for country economic data
-- [ ] Region/Country nodes: identifier-only (name, iso_code, type). Economic data (GDP, credit rating, trade balance) stored as MacroIndicator nodes linked to Region — see [02-graph-schema.md](02-graph-schema.md)
+  - [ ] Write time series → DuckDB (`financial_metrics` table with all columns per schema); recompute latest snapshot → FalkorDB Company node per [02-graph-schema.md](02-graph-schema.md) § Data Flow diagram
+- [ ] FRED API integration for starter macro indicators — **use series IDs from [03-data-ingestion.md](03-data-ingestion.md) § FRED source table**: GDP, GDPC1, UNRATE, CPIAUCSL, CPILFESL, FEDFUNDS, DFF, T10YIE, T10Y2Y. Write to DuckDB `macro_timeseries` table. Create MacroIndicator graph nodes per [02-graph-schema.md](02-graph-schema.md) § Future Data Sources → MacroIndicator (`indicator_id`, `name`, `unit`, `source`)
+- [ ] World Bank / IMF API integration for country economic data — **per [03-data-ingestion.md](03-data-ingestion.md) § World Bank / IMF source table**: use indicators NY.GDP.MKTP.CD, NY.GDP.MKTP.KD.ZG, FP.CPI.TOTL.ZG, NE.TRD.GNFS.ZS, GC.DOD.TOTL.GD.ZS
+- [ ] Region/Country nodes: **MUST use exact Region node schema from [02-graph-schema.md](02-graph-schema.md) § Region** — identifier-only (`name`, `region_type`, `iso_code`, `last_updated`). Economic data stored as MacroIndicator nodes linked to Region via REPORTS_INDICATOR, NOT as properties on Region nodes
 - [ ] Entity resolution: ticker/CIK-based dedup
 - [ ] Ingestion state tracking (SQLite)
 - [ ] CLI commands: `ingest edgar`, `ingest financials`, `ingest macro`, `ingest countries`
@@ -275,54 +315,58 @@ src/investment_researcher/ingestion/
 > **Scope discipline**: The tasks below are split into two tiers. **Tier 1** (this phase): News, supply chain, executives, competition, commodities, Congressional trades, company IR pages/press releases — the core relationship types needed to validate the Ripple Effect Analyzer. **Tier 2** (defer to Phase 5): 13F institutional holdings, government contracts, legislation/policy — valuable but not required for core validation. Complete Tier 1 before starting Tier 2. Resist the temptation to build everything at once.
 
 ### Tasks
-- [ ] News pipeline:
-  - [ ] NewsAPI or Finnhub integration
-  - [ ] Article deduplication
-  - [ ] LLM-based entity extraction + sentiment analysis
+> **Implementation spec**: All new node types and relationship types **MUST match** [02-graph-schema.md](02-graph-schema.md) § Future Data Sources (Phase 2-3 sections) and § Core Relationships. News pipeline **MUST follow** [03-data-ingestion.md](03-data-ingestion.md) § Pipeline 3: News. IR pages **MUST follow** [03-data-ingestion.md](03-data-ingestion.md) § Pipeline 4: Web Scraping. Congressional disclosures **MUST follow** [03-data-ingestion.md](03-data-ingestion.md) § Pipeline 6. Edge property extraction **MUST follow** [03-data-ingestion.md](03-data-ingestion.md) § Edge Property Extraction Strategy (includes exact LLM extraction prompts and confidence scoring tables).
+
+- [ ] News pipeline **per [03-data-ingestion.md](03-data-ingestion.md) § Pipeline 3: News**:
+  - [ ] NewsAPI or Finnhub integration — use source table in [03-data-ingestion.md](03-data-ingestion.md) § News APIs for API endpoints, pricing. **Recommended: Marketaux** per doc recommendation
+  - [ ] Article deduplication (by URL hash per Pipeline 3 step 2)
+  - [ ] LLM-based entity extraction + sentiment analysis (Pipeline 3 steps 4-5)
   - [ ] Impact scoring
-  - [ ] Company-news relationship linking
+  - [ ] Company-news relationship linking — create **NewsArticle nodes** per [02-graph-schema.md](02-graph-schema.md) § Future Data Sources → NewsArticle (`article_id`, `title`, `source`, `url`, `published_date`, `summary`, `sentiment`, `impact_score`, `embedding`). Link via **MENTIONED_IN** relationship
   - [ ] Political/policy news detection and linking
-- [ ] Company IR pages & press releases (Tier 1 — see [03-data-ingestion.md](03-data-ingestion.md) Pipeline 4):
-  - [ ] RSS feed discovery for tracked companies (PRNewswire, BusinessWire, GlobeNewsWire)
+- [ ] Company IR pages & press releases (Tier 1 — **MUST follow [03-data-ingestion.md](03-data-ingestion.md) § Pipeline 4: Web Scraping**, including pipeline steps 1-5):
+  - [ ] RSS feed discovery for tracked companies (PRNewswire, BusinessWire, GlobeNewsWire) — use source table in [03-data-ingestion.md](03-data-ingestion.md) § Company Investor Relations Pages
   - [ ] Scrapy + RSS fetcher for IR pages and press release PDFs
-  - [ ] LLM event classification (M&A, earnings, guidance, leadership, product launch)
+  - [ ] LLM event classification (M&A, earnings, guidance, leadership, product launch) per Pipeline 4 step 2
   - [ ] GraphRAG-SDK entity extraction → NewsArticle, Filing, Person, Company nodes
-  - [ ] Press-release-to-8-K reconciliation (link press release → filing when 8-K confirms)
-  - [ ] Daily RSS polling cadence + weekly IR page deep scrape
-- [ ] Supply chain relationship extraction:
-  - [ ] From 10-K "Customers" / "Suppliers" sections (text mining)
-  - [ ] From publicly available supply chain databases
+  - [ ] Press-release-to-8-K reconciliation per Pipeline 4 step 4 (link press release → filing when 8-K confirms within 48 hrs)
+  - [ ] Daily RSS polling cadence + weekly IR page deep scrape per [03-data-ingestion.md](03-data-ingestion.md) § Pipeline 4 Cadence
+- [ ] Supply chain relationship extraction — **populate ALL SUPPLIES_TO edge properties per [02-graph-schema.md](02-graph-schema.md) § Company ↔ Company** and use **extraction prompts from [03-data-ingestion.md](03-data-ingestion.md) § Edge Property Extraction Strategy → SUPPLIES_TO Edges**:
+  - [ ] From 10-K "Customers" / "Suppliers" sections (text mining) — extract from Item 1, Item 1A, Note 14/15 per [03-data-ingestion.md](03-data-ingestion.md) § SUPPLIES_TO Edges
+  - [ ] From publicly available supply chain databases (ImportYeti per [03-data-ingestion.md](03-data-ingestion.md) § Company Supply Chain source table)
   - [ ] From news articles mentioning supply relationships
-  - [ ] **Populate edge properties**: product_category, dependency_level, is_sole_source, revenue_pct, contract_value_usd (see [03-data-ingestion.md](03-data-ingestion.md) § Edge Property Extraction Strategy)
-- [ ] Executive/board member linking:
+  - [ ] **Populate edge properties**: `product_category`, `dependency_level`, `is_sole_source`, `revenue_pct`, `contract_value_usd`, `volume_estimate`, `geographic_risk`, `alternative_suppliers`, `lead_time_weeks`, `confidence`, `source`, `last_confirmed`, `created_at`, `valid_from`, `valid_to`, `description` (LLM-generated narrative). Apply **confidence scoring by source** per [03-data-ingestion.md](03-data-ingestion.md) § Confidence Scoring by Source table (XBRL: 0.95-1.0, 10-K suppliers: 0.80-0.90, Risk Factors: 0.70-0.85, News: 0.60-0.75)
+- [ ] Executive/board member linking — **use extraction strategy from [03-data-ingestion.md](03-data-ingestion.md) § HAS_EXECUTIVE / HAS_BOARD_MEMBER Edges** (parse DEF 14A tables structurally, not via LLM, per doc recommendation for Summary Compensation Table):
   - [ ] Extract from DEF 14A (proxy statement) filings
-  - [ ] Link people across companies
-- [ ] Competitive dynamics:
+  - [ ] **Populate HAS_EXECUTIVE edge properties** per [02-graph-schema.md](02-graph-schema.md): `title`, `start_date`, `end_date`, `compensation_usd`, `stock_ownership_pct`, `source`, `last_confirmed`, `description`
+  - [ ] **Populate HAS_BOARD_MEMBER edge properties** per [02-graph-schema.md](02-graph-schema.md): `role`, `committee` (array), `is_independent`, `start_date`, `end_date`, `stock_ownership_shares`, `source`, `last_confirmed`, `description`
+  - [ ] Link people across companies (enables board interlock queries per [02-graph-schema.md](02-graph-schema.md) § Example Traversals)
+- [ ] Competitive dynamics — **use extraction prompts from [03-data-ingestion.md](03-data-ingestion.md) § COMPETES_WITH Edges**:
   - [ ] Industry peer grouping (GICS-based)
-  - [ ] COMPETES_WITH relationships from filing text
-  - [ ] **Populate edge properties**: market_segment, intensity, market_share_a/b, differentiation, threat_level (see [02-graph-schema.md](02-graph-schema.md) § COMPETES_WITH)
-- [ ] Commodity dependencies:
-  - [ ] Map key commodities to industries
+  - [ ] COMPETES_WITH relationships from filing text — extract from 10-K Item 1 → Competition section
+  - [ ] **Populate ALL COMPETES_WITH edge properties** per [02-graph-schema.md](02-graph-schema.md) § Company ↔ Company: `market_segment`, `intensity` ("direct"|"partial"|"adjacent"|"emerging"), `geographic_overlap` (array), `market_share_a`, `market_share_b`, `differentiation`, `competitive_moat`, `threat_level` ("existential"|"significant"|"moderate"|"low"), `confidence`, `source`, `last_confirmed`, `created_at`, `valid_from`, `description`
+- [ ] Commodity dependencies — create **Commodity nodes** per [02-graph-schema.md](02-graph-schema.md) § Future Data Sources → Commodity:
+  - [ ] Map key commodities to industries via DEPENDS_ON / PRODUCES / AFFECTS_INDUSTRY relationships
   - [ ] Company-commodity relationships from filing risk factors
-- [ ] Congressional investment disclosures:
-  - [ ] Capitol Trades or Quiver Quantitative API integration
-  - [ ] Legislator nodes + CongressionalTrade nodes
-  - [ ] Committee assignment mapping (Congress.gov API)
-  - [ ] Committee → Industry oversight relationships
-  - [ ] Trade → Company linkage
-- [ ] **[Tier 2 — defer to Phase 5]** Institutional holdings (13F):
+- [ ] Congressional investment disclosures — **MUST follow [03-data-ingestion.md](03-data-ingestion.md) § Pipeline 6: Congressional Investment Disclosures** (pipeline steps 1-3, source tables, entity resolution):
+  - [ ] Capitol Trades or Quiver Quantitative API integration — use source table in [03-data-ingestion.md](03-data-ingestion.md) § Congressional Disclosures for API endpoints
+  - [ ] **Legislator nodes** per [02-graph-schema.md](02-graph-schema.md) § Future Data Sources → Legislator (keyed on `bioguide_id`) + **CongressionalTrade nodes** per § CongressionalTrade
+  - [ ] Committee assignment mapping — use Congress.gov API per [03-data-ingestion.md](03-data-ingestion.md) § Congressional Committee Assignments source table (API key, 5000 req/hr)
+  - [ ] Relationships: `DISCLOSED_TRADE` (Legislator → CongressionalTrade), `INVOLVES` (CongressionalTrade → Company), `MEMBER_OF` (Legislator → Committee) per [03-data-ingestion.md](03-data-ingestion.md) § Pipeline 6
+  - [ ] Trade → Company linkage (match asset description → Company node by ticker per Pipeline 6 step 2)
+- [ ] **[Tier 2 — defer to Phase 5]** Institutional holdings (13F) — **when built, MUST follow [03-data-ingestion.md](03-data-ingestion.md) § Pipeline 7: Institutional Holdings — 13F** (pipeline steps 1-5, CUSIP→ticker mapping via OpenFIGI):
   - [ ] EDGAR 13F filing parser (XML)
-  - [ ] InstitutionalHolder nodes + HOLDS_POSITION relationships
-  - [ ] Quarter-over-quarter change computation
+  - [ ] **InstitutionalHolder nodes** per [02-graph-schema.md](02-graph-schema.md) § Future Data Sources → InstitutionalHolder (keyed on CIK) + **HOLDS_POSITION relationships** (shares, value, quarter, position change type)
+  - [ ] Quarter-over-quarter change computation per Pipeline 7 step 3
   - [ ] Seed: Top 100 institutional filers by AUM
 
   > **Tier note**: Doc [03-data-ingestion.md](03-data-ingestion.md) classifies 13F as Tier 1 (Pipeline 7) due to its data importance. It is deferred here to Phase 5 for *implementation sequencing* — the Ripple Effect Analyzer can be validated without 13F data, and building the 13F parser is a separate engineering effort.
 
-- [ ] **[Tier 2 — defer to Phase 5]** Government & policy data:
-  - [ ] Congress.gov API for active bills + status tracking
+- [ ] **[Tier 2 — defer to Phase 5]** Government & policy data — **when built, MUST follow [03-data-ingestion.md](03-data-ingestion.md) § Pipeline 8: Government & Policy Data** (pipeline steps 1-3):
+  - [ ] Congress.gov API for active bills + status tracking — use source table in [03-data-ingestion.md](03-data-ingestion.md) § Legislation & Bill Tracking
   - [ ] Federal Register API for regulations/executive orders
-  - [ ] Legislation nodes + AFFECTS relationships to industries
-  - [ ] USAspending.gov for government contracts (> $1M)
+  - [ ] **Legislation nodes** per [02-graph-schema.md](02-graph-schema.md) § Future Data Sources → Legislation + **AFFECTS relationships** to industries (with `impact_type`, `direction`, `confidence`)
+  - [ ] USAspending.gov for government contracts (> $1M) — **GovernmentContract nodes** per [02-graph-schema.md](02-graph-schema.md) § Future Data Sources → GovernmentContract, use source table in [03-data-ingestion.md](03-data-ingestion.md) § Federal Government Contracts
 - [ ] News pipeline scheduler (every 15-30 min)
 - [ ] IR press release RSS polling (daily cadence)
 - [ ] Full FRED macro indicator suite (expanding from Phase 2 starter set)
@@ -349,56 +393,62 @@ src/investment_researcher/ingestion/
 **Goal**: Multi-agent system operational. Triage, Ripple Effect Analyzer, and Research Synthesizer working. CLl chat routes through agent system. Report queue receiving findings.
 
 ### Tasks
-- [ ] Agent tools implementation (all in `agents/tools/` — expanding files created in Phase 0):
-  - [ ] `query_graph` — ✅ Phase 0 (already in `graph_tools.py`, expand for full Cypher support)
-  - [ ] `get_company_profile` — ✅ Phase 0 (already in `graph_tools.py`, expand with financial snapshot)
-  - [ ] `get_related_companies` — ✅ Phase 0 (already in `graph_tools.py`, expand hop depth + filters)
-  - [ ] `semantic_search_graph` — NEW: Vector similarity search (add to `graph_tools.py`)
-  - [ ] `get_industry_peers` — NEW: Peer comparison (add to `graph_tools.py`)
-  - [ ] `get_recent_news` — News retrieval with filters
-  - [ ] `get_macro_indicators` — Macro data retrieval
-  - [ ] `get_congressional_trades` — Congressional disclosure query
-  - [ ] `get_institutional_holdings` — 13F holdings query *(stub until Phase 5 data pipeline)*
-  - [ ] `get_policy_impacts` — Legislation/regulation query *(stub until Phase 5 data pipeline)*
-  - [ ] `get_country_profile` — Country economic profile
-  - [ ] `get_government_contracts` — Federal contract query *(stub until Phase 5 data pipeline)*
-  - [ ] `write_report` — Report queue writer
-  - [ ] `get_existing_reports` — Duplicate check
-- [ ] Agent definitions (all in `agents/definitions/` \u2014 directory created in Phase 0):
-  - [ ] Triage Agent (router) \u2014 NEW: add `triage.py`
-  - [ ] Ripple Effect Analyzer \u2014 \u2705 Phase 0 (`ripple_effect.py` exists, expand for multi-agent handoffs)
-  - [ ] Fundamental Screener (metric-based screening) \u2014 NEW: add `fundamental_screener.py`
-  - [ ] Macro-Micro Linker (macro to company impact) \u2014 NEW: add `macro_micro.py`
-  - [ ] Research Synthesizer (final report production) \u2014 NEW: add `research_synthesizer.py`
-  - [ ] Data Monitor Agent (change detection) \u2014 NEW: add `data_monitor.py`
-- [ ] Guardrails:
-  - [ ] Input validation (Cypher injection prevention)
-  - [ ] Output quality (report completeness check)
-  - [ ] Hypothesis framing guardrail (ensure outputs are framed as hypotheses, not conclusions — see [00-strategic-rationale.md](00-strategic-rationale.md))
-  - [ ] Bear case enforcement (every report must include disconfirming evidence / bear case)
-  - [ ] Source citation enforcement (every claim must cite filing accession number, article URL, or Cypher query)
+> **Implementation spec**: All agent definitions, tools, guardrails, report schema, and handoff flows **MUST match** [04-agent-system.md](04-agent-system.md) exactly. Agent `name`, `instructions`, `tools` list, `handoffs` list, and `model` are defined as Python code blocks in that document — treat them as implementation specs, not pseudocode. Tool function signatures (parameter names, types, docstrings) are contracts. Report JSON schema is defined in [04-agent-system.md](04-agent-system.md) § 6. Research Synthesizer. Paper trading model is defined in [04-agent-system.md](04-agent-system.md) § Paper Trading Protocol. LLM model assignments per agent are defined in [04-agent-system.md](04-agent-system.md) § LLM Model Strategy.
+
+- [ ] Agent tools implementation (all in `agents/tools/` — expanding files created in Phase 0) — **MUST implement exact function signatures from [04-agent-system.md](04-agent-system.md) § Agent Tools**:
+  - [ ] `query_graph(cypher_query: str)` — ✅ Phase 0 (already in `graph_tools.py`, expand for full Cypher support)
+  - [ ] `get_company_profile(ticker: str)` — ✅ Phase 0 (expand: must query **both FalkorDB and DuckDB** per [04-agent-system.md](04-agent-system.md) § Graph Query Tools docstring)
+  - [ ] `get_related_companies(ticker: str, relationship_types: list[str], max_depth: int)` — ✅ Phase 0 (expand hop depth + filters)
+  - [ ] `semantic_search_graph(query: str, node_type: str, limit: int)` — NEW: **exact signature from [04-agent-system.md](04-agent-system.md) § Graph Query Tools**
+  - [ ] `get_industry_peers(ticker: str)` — NEW: **per [04-agent-system.md](04-agent-system.md) § Graph Query Tools** (uses Company node snapshots + DuckDB growth rates)
+  - [ ] `get_recent_news(ticker: str, industry: str, hours: int, min_impact_score: float)` — **exact signature from [04-agent-system.md](04-agent-system.md) § Data Tools**
+  - [ ] `get_macro_indicators(indicator_type: str)` — **exact signature from [04-agent-system.md](04-agent-system.md) § Data Tools**
+  - [ ] `get_congressional_trades(legislator: str, ticker: str, party: str, chamber: str, days: int, transaction_type: str)` — **exact signature from [04-agent-system.md](04-agent-system.md) § Political & Government Tools**
+  - [ ] `get_institutional_holdings(ticker: str, holder: str, quarter: str, min_value_usd: float)` — **exact signature from [04-agent-system.md](04-agent-system.md) § Political & Government Tools** *(stub until Phase 5 data pipeline)*
+  - [ ] `get_policy_impacts(industry: str, legislation_type: str, status: str, days: int)` — **exact signature** *(stub until Phase 5 data pipeline)*
+  - [ ] `get_country_profile(country: str)` — **exact signature from [04-agent-system.md](04-agent-system.md) § Political & Government Tools**
+  - [ ] `get_government_contracts(ticker: str, agency: str, min_value: float, days: int)` — **exact signature** *(stub until Phase 5 data pipeline)*
+  - [ ] `write_report(title, ticker, thesis, direction, confidence, time_horizon, catalysts, risks, bear_case, supporting_evidence, source_citations, related_companies, macro_context, report_type)` — **exact signature from [04-agent-system.md](04-agent-system.md) § Report Tools**. Reports created with `status='needs_review'`
+  - [ ] `get_existing_reports(ticker: str, report_type: str, days: int)` — Duplicate check
+  - [ ] `get_financial_history(ticker: str, metrics: list[str], quarters: int)` — **exact signature from [04-agent-system.md](04-agent-system.md) § Data Tools** with `lru_cache`, DuckDB window functions for growth rates
+  - [ ] `get_recent_ingestion_stats()` — per [04-agent-system.md](04-agent-system.md) § Data Tools
+  - [ ] `get_commodity_impacts(commodity: str)` — per [04-agent-system.md](04-agent-system.md) § Data Tools
+- [ ] Agent definitions (all in `agents/definitions/` — directory created in Phase 0) — **MUST use exact `name`, `instructions`, `tools`, `handoffs`, `model` from [04-agent-system.md](04-agent-system.md) § Agent Definitions**:
+  - [ ] Triage Agent (router) — NEW: add `triage.py`. **Use exact instructions from [04-agent-system.md](04-agent-system.md) § 1. Triage Agent** including thesis detection routing logic, `model="gpt-4.1"`, handoffs to all 5 specialists
+  - [ ] Ripple Effect Analyzer — ✅ Phase 0 (`ripple_effect.py` exists, expand). **Update instructions to match full spec in [04-agent-system.md](04-agent-system.md) § 3. Ripple Effect Analyzer** — must include: confidence decay (0.9/hop), staleness decay, ALL edge property usage instructions (SUPPLIES_TO 6 properties, COMPETES_WITH 4 properties, HAS_EXECUTIVE 3 properties, example Cypher queries), thesis exploration mode, `model="gpt-4.1"`
+  - [ ] Fundamental Screener — NEW: add `fundamental_screener.py`. **Use exact spec from [04-agent-system.md](04-agent-system.md) § 4. Fundamental Screener** including screening criteria, DuckDB integration, `model="gpt-4.1"`
+  - [ ] Macro-Micro Linker — NEW: add `macro_micro.py`. **Use exact spec from [04-agent-system.md](04-agent-system.md) § 5. Macro-Micro Linker** including analytical chains, country data, `model="gpt-4.1"`
+  - [ ] Research Synthesizer — NEW: add `research_synthesizer.py`. **Use exact spec from [04-agent-system.md](04-agent-system.md) § 6. Research Synthesizer** including report JSON schema (must include `bear_case`, `source_citations`, `report_type`, `status: "needs_review"`), `model="gpt-4.1"`
+  - [ ] Data Monitor Agent — NEW: add `data_monitor.py`. **Use exact spec from [04-agent-system.md](04-agent-system.md) § 2. Data Monitor Agent** including significance thresholds, `model="gpt-4.1"`
+- [ ] Guardrails — **implement per [04-agent-system.md](04-agent-system.md) § Guardrails** (exact guardrail function signatures defined there):
+  - [ ] Input: `validate_query_safety` — Cypher injection prevention per [04-agent-system.md](04-agent-system.md) § Input Guardrails
+  - [ ] Input: `check_market_hours` — stale data sensitivity flag per [04-agent-system.md](04-agent-system.md) § Input Guardrails
+  - [ ] Output: `validate_report_quality` — confidence > 0.5, all required fields, thesis specificity per [04-agent-system.md](04-agent-system.md) § Output Guardrails
+  - [ ] Output: `enforce_bear_case` — reject reports with empty/dismissive bear case per [04-agent-system.md](04-agent-system.md) § Output Guardrails
+  - [ ] Output: `enforce_source_citations` — every factual claim must reference filing accession, article URL, Cypher query, or data source per [04-agent-system.md](04-agent-system.md) § Output Guardrails
+  - [ ] Hypothesis framing guardrail (ensure outputs are framed as hypotheses, not conclusions — per [00-strategic-rationale.md](00-strategic-rationale.md))
 - [ ] Confidence decay across hops:
   - [ ] Implement hop-distance-based confidence discount (90% per hop)
   - [ ] Display confidence at each hop in ripple effect results
-- [ ] Report queue (SQLite):
-  - [ ] Report model (Pydantic) — includes `bear_case`, `source_citations`, `disconfirming_evidence` fields
+- [ ] Report queue (SQLite) — **report JSON schema MUST match [04-agent-system.md](04-agent-system.md) § 6. Research Synthesizer** output format:
+  - [ ] Report model (Pydantic) — fields: `title`, `ticker`, `thesis`, `direction`, `confidence`, `time_horizon`, `catalysts`, `risks`, `bear_case`, `supporting_evidence`, `source_citations` (array of `{type, accession_number/url/query, detail}`), `related_companies`, `macro_context`, `report_type` ("opportunity"|"risk"|"ripple_effect"|"macro_impact"|"political_signal"), `status` ("needs_review")
   - [ ] SQLite store (CRUD)
   - [ ] CLI viewer
 - [ ] Human review workflow:
   - [ ] Reports flagged as "needs_review" before action
   - [ ] CLI `reports review <id>` command to mark as reviewed/rejected
-- [ ] Paper trading system:
-  - [ ] PaperTrade model (see [04-agent-system.md](04-agent-system.md) § Investment Decision Workflow)
-  - [ ] Auto-record paper trades for reports with confidence > 0.6
+- [ ] Paper trading system — **MUST implement exact `PaperTrade` model from [04-agent-system.md](04-agent-system.md) § Paper Trading Protocol**:
+  - [ ] PaperTrade model: `report_id`, `ticker`, `direction`, `entry_price`, `entry_date`, `thesis`, `confidence`, `time_horizon`, `price_30d`, `price_60d`, `price_90d`, `return_30d`, `return_60d`, `return_90d`, `thesis_correct`, `notes`
+  - [ ] Auto-record paper trades for reports with confidence > 0.6 per [04-agent-system.md](04-agent-system.md) § Decision Framework
   - [ ] Price snapshot fetcher (30/60/90 day follow-up)
   - [ ] CLI: `paper-trades list`, `paper-trades review <id>`
-  - [ ] CLI: `paper-trades performance` (hit rate, returns vs. SPY)
+  - [ ] CLI: `paper-trades performance` (hit rate, returns vs. SPY) — tracking metrics per [04-agent-system.md](04-agent-system.md) § Performance Tracking
 - [ ] CLI `chat` command routed through Triage Agent
 - [ ] CLI `reports list` and `reports view` commands
-- [ ] Thesis-driven research flow:
+- [ ] Thesis-driven research flow — **handoff flow per [04-agent-system.md](04-agent-system.md) § Handoff Flow Examples → Thesis-Driven**:
   - [ ] CLI `explore "thesis statement"` command
-  - [ ] Triage Agent thesis detection and routing logic
-  - [ ] Ripple Effect Analyzer thesis exploration mode (multi-directional: long, short, hedge)
+  - [ ] Triage Agent thesis detection and routing logic (per [04-agent-system.md](04-agent-system.md) § 1. Triage Agent instructions: distinguish QUESTION vs THESIS)
+  - [ ] Ripple Effect Analyzer thesis exploration mode per [04-agent-system.md](04-agent-system.md) § 3. Ripple Effect Analyzer "FOR THESIS EXPLORATION" block (multi-directional: long, short, hedge)
   - [ ] Opportunity landscape report format (grouped by direction, ranked by confidence)
   - [ ] Domain expertise capture (user can annotate thesis with supporting reasoning)
 - [ ] **Monetization — start revenue streams** (see [09-monetization-strategy.md](09-monetization-strategy.md)):
@@ -469,9 +519,9 @@ src/investment_researcher/ingestion/
   - [ ] Update `.env` and `docker-compose.yml` volume mounts
   - [ ] Verify checksums on critical databases post-migration
   - [ ] LLM weights stay on NVMe (GPU needs fast local access)
-- [ ] Autonomous agent loop:
+- [ ] Autonomous agent loop — **MUST implement exact scheduler configuration from [04-agent-system.md](04-agent-system.md) § Autonomous Agent Loop** (includes `run_data_monitor`, `run_fundamental_screen`, `run_macro_check` functions with exact input strings):
   - [ ] APScheduler-based trigger system
-  - [ ] Data Monitor runs every 30 min
+  - [ ] Data Monitor runs every 30 min (per [04-agent-system.md](04-agent-system.md) § Autonomous Agent Loop)
   - [ ] Fundamental screen every 6 hours
   - [ ] Macro check every 4 hours
   - [ ] Loop produces reports to queue without human intervention
@@ -549,7 +599,7 @@ Before expanding to Mac Studios, document the RTX 5090 inference baseline:
   - [ ] Llama 3.1 70B (Q8, single Studio) for NL→Cypher + entity extraction
   - [ ] Qwen 2.5 72B as alternative to Llama 70B
   - [ ] nomic-embed-text or mxbai-embed-large for embeddings
-- [ ] Multi-tier model routing (workstation + Mac cluster):
+- [ ] Multi-tier model routing (workstation + Mac cluster) — **model assignments per agent MUST follow [04-agent-system.md](04-agent-system.md) § LLM Model Strategy** (Triage/Monitor: mini/8B, Ripple/Synthesizer: 4.1/405B, Screener/Macro: 4.1/70B):
   - [ ] RTX 5090: Llama 8B (triage) + Qwen 32B (routine agents) — existing
   - [ ] Mac Studio: 405B (complex reasoning, KG construction) — new
   - [ ] LiteLLM routing: model-aware dispatch to correct endpoint
