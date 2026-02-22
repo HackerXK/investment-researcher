@@ -80,6 +80,7 @@ Foundation   Extraction   Data         Enrichment   System       Automate     Ex
 - [ ] `src/investment_researcher/graph/connection.py` — FalkorDB connection + health check (Phase 1 adds retry logic)
 - [ ] `src/investment_researcher/graph/schema.py` — **MUST implement exactly per [02-graph-schema.md](02-graph-schema.md) § Core Node Types and § Core Relationships**. Node types: Company (all 20+ properties including `ticker`, `cik`, `name`, `legal_name`, `market_cap`, `revenue_ttm`, `pe_ratio`, `embedding`, etc.), Person (`name`, `title`, `bio`, `linkedin_url`, `last_updated`), Filing (`accession_number`, `form_type`, `filed_date`, `period_of_report`, `filing_url`, `summary`, `key_topics`, `sentiment`, `summary_embedding`, `processed`), Industry (`name`, `gics_code`, `description`, `last_updated`), Sector (`name`, `gics_code`, `description`), Region (`name`, `region_type`, `iso_code`, `last_updated`). **Do NOT invent properties or omit properties — use the exact property names and types from the schema doc.** Indexes per § Indexes. Phase 1 adds full relationship schema + auto-extension via GraphRAG-SDK
 - [ ] `cli.py` — Typer CLI with `chat` and `ingest` commands (Phase 1 adds `health` — same file throughout)
+- [ ] `README.md` — developer guide covering: project setup, common CLI commands, how to access and query each database (FalkorDB, SQLite, DuckDB) for debugging, and a map of the `src/investment_researcher/` module structure
 
 #### SEC EDGAR Pipeline (Core Development Focus)
 > **Implementation spec**: Follow [03-data-ingestion.md](03-data-ingestion.md) § Pipeline 1: SEC EDGAR — pipeline steps 1-7, source table fields, rate limits, and data flow. All extracted entities and relationships **MUST** conform to [02-graph-schema.md](02-graph-schema.md) property definitions.
@@ -169,6 +170,7 @@ investment-researcher/
 │           └── definitions/
 │               └── ripple_effect.py ✓ (single OpenAI Agents SDK agent — Phase 4 adds more agents here)
 ├── cli.py                        ✓  (Typer: chat, ingest edgar — Phase 1 adds health)
+├── README.md                     ✓  (setup, CLI usage, database debugging guide)
 ├── data/
 │   ├── falkordb/                 ✓  (bind mount target — consistent with Phase 1+)
 │   └── raw/filings/              ✓  (downloaded SEC filings — HTML/XML)
