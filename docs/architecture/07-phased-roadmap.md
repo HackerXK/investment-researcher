@@ -78,7 +78,7 @@ Foundation   Extraction   Data         Enrichment   System       Automate     Ex
 - [ ] `.env.example` (OpenAI key only for now — Phase 1 adds Langfuse, Phase 2 adds data API keys)
 - [ ] `src/investment_researcher/config.py` — env var loading (Phase 1 expands, never replaces)
 - [ ] `src/investment_researcher/graph/connection.py` — FalkorDB connection + health check (Phase 1 adds retry logic)
-- [ ] `src/investment_researcher/graph/schema.py` — **MUST implement exactly per [02-graph-schema.md](02-graph-schema.md) § Core Node Types and § Core Relationships**. Node types: Company (all 20+ properties including `ticker`, `cik`, `name`, `legal_name`, `market_cap`, `revenue_ttm`, `pe_ratio`, `embedding`, etc.), Person (`name`, `title`, `bio`, `linkedin_url`, `last_updated`), Filing (`accession_number`, `form_type`, `filed_date`, `period_of_report`, `filing_url`, `summary`, `key_topics`, `sentiment`, `summary_embedding`, `processed`), Industry (`name`, `gics_code`, `description`, `last_updated`), Sector (`name`, `gics_code`, `description`), Region (`name`, `region_type`, `iso_code`, `last_updated`). **Do NOT invent properties or omit properties — use the exact property names and types from the schema doc.** Indexes per § Indexes. Phase 1 adds full relationship schema + auto-extension via GraphRAG-SDK
+- [ ] `src/investment_researcher/graph/schema.py` — **MUST implement exactly per [02-graph-schema.md](02-graph-schema.md) § Core Node Types and § Core Relationships**. Company node properties: `ticker`, `cik`, `name`, `legal_name`, `status`, `market_cap`, `summary`, `risk_factors`, `opportunities`, `embedding`, `last_updated`. Person: `name`, `title`, `bio`, `last_updated`. Filing: `accession_number`, `form_type`, `filed_date`, `period_of_report`, `filing_url`, `summary`, `key_topics`, `sentiment`, `summary_embedding`, `last_updated` (pipeline state tracked in SQLite, not here). Industry: `name`, `gics_code`, `description`. Sector: `name`, `gics_code`, `description`. Region: `name`, `region_type`, `iso_code`, `last_updated`. **Do NOT invent properties or omit properties — use the exact property names and types from the schema doc.** Indexes per § Indexes. Phase 1 adds full relationship schema + auto-extension via GraphRAG-SDK
 - [ ] `src/investment_researcher/ingestion/timeseries.py` — DuckDB writer module: initialize `data/duckdb/financial_timeseries.duckdb` with **exact schema** from [02-graph-schema.md](02-graph-schema.md) § Time Series Data Store (`financial_metrics` table with PK `(ticker, metric_type, period_type, period_end)`; `macro_timeseries` table with PK `(indicator_id, date)`). Expose `write_financial_metrics()` and `recompute_snapshot()` — Phase 2 reuses this module for FMP/FRED data without changes
 - [ ] `cli.py` — Typer CLI with `chat` and `ingest` commands (Phase 1 adds `health` — same file throughout)
 - [ ] `README.md` — developer guide covering: project setup, common CLI commands, how to access and query each database (FalkorDB, SQLite, DuckDB) for debugging, and a map of the `src/investment_researcher/` module structure
@@ -103,7 +103,8 @@ Foundation   Extraction   Data         Enrichment   System       Automate     Ex
   - [ ] Risk factor categorization (geopolitical, regulatory, supply chain, financial)
 - [ ] XBRL parser for structured financial data (revenue, net income, EPS, etc.) — **prefer XBRL over LLM extraction** per [03-data-ingestion.md](03-data-ingestion.md) § XBRL source notes and [02-graph-schema.md](02-graph-schema.md) § Confidence & Data Quality Principles ("prefer structured over extracted")
   - Write full time series → DuckDB `financial_metrics` table (via `timeseries.py`), `accession` column preserved for provenance, per [02-graph-schema.md](02-graph-schema.md) § Time Series Data Store
-  - Recompute Company snapshot metrics (`revenue_ttm`, `pe_ratio`, `revenue_growth_yoy`, `gross_margin`, etc.) → FalkorDB Company node via `recompute_snapshot()` per [02-graph-schema.md](02-graph-schema.md) § Company snapshot metrics
+  - Generate `summary`, `risk_factors`, `opportunities` on Company node via LLM extraction from 10-K text; update `last_updated`
+  - `market_cap` is populated in Phase 2 (requires price feed from FMP); leave null in Phase 0
 - [ ] Filing → FalkorDB loader: create Filing nodes (keyed on `accession_number`), link to Company via `FILED` relationship, populate edge properties. Use MERGE operations per [03-data-ingestion.md](03-data-ingestion.md) § Pipeline 1 step 7
 - [ ] Ingestion state tracking (SQLite) — track which filings have been fetched/parsed/loaded
 - [ ] CLI commands: `ingest edgar --ticker AAPL`, `ingest edgar --list top50`
@@ -123,7 +124,7 @@ Foundation   Extraction   Data         Enrichment   System       Automate     Ex
 #### Data Extraction Quality
 - [ ] `ingest edgar --ticker AAPL` fetches 10-K filing, extracts entities/relationships, and loads into FalkorDB
 - [ ] Extracted SUPPLIES_TO relationships have rich edge properties: product_category, dependency_level, is_sole_source, source (with accession number)
-- [ ] XBRL parser writes financial metrics to DuckDB (`financial_metrics` table) and recomputes Company node snapshots: `revenue_ttm`, `net_income`, `eps`
+- [ ] XBRL parser writes financial metrics to DuckDB (`financial_metrics` table) with provenance
 - [ ] `SELECT COUNT(*) FROM financial_metrics` → rows present for all ingested companies
 - [ ] Spot-check: compare LLM-extracted supply chain data against manually reading the same 10-K section — extraction should capture the key relationships disclosed in the filing
 - [ ] At least 10 companies with SEC-extracted data in the graph
@@ -276,8 +277,8 @@ cli.py                        ← Phase 0 (expanded: health command added)
 
 ### Validation Criteria
 - `python cli.py ingest edgar --companies top100` completes successfully
-- FalkorDB shows ~100 Company nodes with Filing relationships and snapshot metrics
-- Company nodes have `revenue_ttm`, `pe_ratio`, `revenue_growth_yoy` populated
+- FalkorDB shows ~100 Company nodes with `summary`, `risk_factors`, `opportunities` populated from 10-K text
+- Company nodes have `market_cap` populated (from FMP price feed)
 - DuckDB `financial_metrics` table has 20+ quarters of data for tracked companies
 - `SELECT COUNT(*) FROM financial_metrics` → meaningful count (thousands of rows)
 - MacroIndicator nodes show current Fed Funds Rate, CPI, GDP, etc.
