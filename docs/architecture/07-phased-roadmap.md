@@ -80,8 +80,23 @@ Foundation   Extraction   Data         Enrichment   System       Automate     Ex
 - [ ] `src/investment_researcher/graph/connection.py` — FalkorDB connection + health check (Phase 1 adds retry logic)
 - [ ] `src/investment_researcher/graph/schema.py` — **MUST implement exactly per [02-graph-schema.md](02-graph-schema.md) § Core Node Types and § Core Relationships**. Company node properties: `ticker`, `cik`, `name`, `legal_name`, `status`, `market_cap`, `summary`, `risk_factors`, `opportunities`, `embedding`, `last_updated`. Person: `name`, `title`, `bio`, `last_updated`. Filing: `accession_number`, `form_type`, `filed_date`, `period_of_report`, `filing_url`, `file_path`, `summary`, `key_topics`, `sentiment`, `summary_embedding`, `last_updated` (pipeline state tracked in SQLite, not here). Industry: `name`, `gics_code`, `description`. Sector: `name`, `gics_code`, `description`. Region: `name`, `region_type`, `iso_code`, `last_updated`. **Do NOT invent properties or omit properties — use the exact property names and types from the schema doc.** Indexes per § Indexes. Phase 1 adds full relationship schema + auto-extension via GraphRAG-SDK
 - [ ] `src/investment_researcher/ingestion/timeseries.py` — DuckDB writer module: initialize `data/duckdb/financial_timeseries.duckdb` with **exact schema** from [02-graph-schema.md](02-graph-schema.md) § Time Series Data Store (`financial_metrics` table with PK `(ticker, metric_type, period_type, period_end)`; `macro_timeseries` table with PK `(indicator_id, date)`). Expose `write_financial_metrics()` and `recompute_snapshot()` — Phase 2 reuses this module for FMP/FRED data without changes
-- [ ] `cli.py` — Typer CLI with `chat` and `ingest` commands (Phase 1 adds `health` — same file throughout)
-- [ ] `README.md` — developer guide covering: project setup, common CLI commands, how to access and query each database (FalkorDB, SQLite, DuckDB) for debugging, and a map of the `src/investment_researcher/` module structure
+- [ ] `cli.py` — Typer CLI with `chat`, `ingest`, and `web` commands (Phase 1 adds `health` — same file throughout)
+- [ ] `README.md` — developer guide covering: project setup, common CLI commands, financial dashboard usage, how to access and query each database (FalkorDB, SQLite, DuckDB) for debugging, and a map of the `src/investment_researcher/` module structure
+
+#### Financial Dashboard (Web UI for DuckDB Data Presentation)
+> **Purpose**: Provide a web-based interface to browse and visualize all financial data stored in DuckDB. Select a company and see its key financial metrics over time — revenue, EPS, margins, balance sheet ratios — with interactive charts and tables. Uses only Phase 0 infrastructure (DuckDB + CLI); no external service dependencies beyond FastAPI/Uvicorn.
+
+- [ ] Analytics layer that queries DuckDB and computes derived metrics on the fly:
+  - Auto-detects each company's fiscal year-end month (XBRL comparatives mix quarterly data into the annual bucket; must filter correctly)
+  - Annual and quarterly time series with YoY/QoQ growth computed via SQL window functions per [02-graph-schema.md](02-graph-schema.md) § Growth Rate Strategy
+  - Derived metrics: gross/operating/net margins, EPS trends, debt-to-equity, ROE, ROA
+  - Note: true P/E ratio deferred to Phase 2 (requires FMP market price data)
+- [ ] FastAPI backend exposing a REST API for ticker discovery, per-company dashboards, and individual metric queries — serves static HTML at root
+- [ ] Single-page web dashboard (Chart.js) with:
+  - Company selector, KPI summary cards, and tabbed views (Overview, Income Statement, Margins, Earnings, Balance Sheet, Quarterly Detail)
+  - Interactive bar/line charts, data tables with color-coded growth indicators
+- [ ] `ir web` CLI command to launch the dashboard server
+- [ ] FastAPI + Uvicorn added to project dependencies — **per [05-tech-stack.md](05-tech-stack.md)**
 
 #### SEC EDGAR Pipeline (Core Development Focus)
 > **Implementation spec**: Follow [03-data-ingestion.md](03-data-ingestion.md) § Pipeline 1: SEC EDGAR — pipeline steps 1-7, source table fields, rate limits, and data flow. All extracted entities and relationships **MUST** conform to [02-graph-schema.md](02-graph-schema.md) property definitions.
@@ -140,6 +155,12 @@ Foundation   Extraction   Data         Enrichment   System       Automate     Ex
 - [ ] `python cli.py chat "What companies are affected if TSMC has a production disruption?"` returns multi-hop analysis using rich edge properties
 - [ ] Graph in FalkorDB browser (localhost:3000) shows interconnected network
 
+#### Financial Dashboard
+- [ ] `ir web` launches dashboard; selecting any ingested ticker shows its financial data
+- [ ] Annual revenue chart shows correct fiscal-year values (not polluted by XBRL quarterly comparatives)
+- [ ] Computed metrics (margins, growth rates, balance sheet ratios) are mathematically accurate
+- [ ] Dashboard renders all charts and tables in the browser without errors
+
 ### Decision Framework
 
 | Milestone | Assessment |
@@ -171,13 +192,19 @@ investment-researcher/
 │       │   ├── loader.py         ✓  (Filing → FalkorDB node/edge writer)
 │       │   ├── timeseries.py     ✓  (DuckDB writer: financial_metrics + macro_timeseries tables, recompute_snapshot)
 │       │   └── state.py          ✓  (SQLite ingestion state tracker)
+│       ├── analytics/
+│       │   └── __init__.py       ✓  (financial analytics: margins, ratios, growth, FY-end detection)
+│       ├── web/
+│       │   ├── app.py            ✓  (FastAPI backend — REST API + static serving)
+│       │   └── static/
+│       │       └── index.html    ✓  (single-page financial dashboard — Chart.js)
 │       └── agents/
 │           ├── tools/
 │           │   ├── graph_tools.py    ✓  (query_graph, get_company_profile, get_related_companies — Phase 4 expands)
 │           │   └── timeseries_tools.py ✓  (get_financial_history — queries DuckDB; Phase 4 expands)
 │           └── definitions/
 │               └── ripple_effect.py ✓ (single OpenAI Agents SDK agent — Phase 4 adds more agents here)
-├── cli.py                        ✓  (Typer: chat, ingest edgar — Phase 1 adds health)
+├── cli.py                        ✓  (Typer: chat, ingest edgar, web — Phase 1 adds health)
 ├── README.md                     ✓  (setup, CLI usage, database debugging guide)
 ├── data/
 │   ├── falkordb/                 ✓  (bind mount target — consistent with Phase 1+)

@@ -16,7 +16,10 @@
 | Task Scheduling | APScheduler | 3.x | Cron-like scheduling for ingestion + agent loops |
 | Report Storage | SQLite | 3.x | Report queue, ingestion state tracking |
 | Time Series Store | DuckDB | 1.x+ | Financial metrics time series, macro time series, growth computations. See [02-graph-schema.md](02-graph-schema.md) § Time Series Data Store |
-| CLI Framework | Click or Typer | — | Interactive command-line interface |
+| CLI Framework | Typer | 0.9+ | Interactive command-line interface |
+| Web Framework | FastAPI | 0.115+ | Financial dashboard REST API + static file serving (Phase 0). Serves analytics endpoints and single-page Chart.js dashboard via `ir web` |
+| Web Server | Uvicorn | 0.30+ | ASGI server for FastAPI. Launched via `ir web` CLI command |
+| Charting | Chart.js | 4.x (CDN) | Interactive financial charts in the web dashboard — bar, line, and mixed charts for revenue, EPS, margins, balance sheet metrics |
 | HTTP Client | httpx | — | Async HTTP for API calls |
 | Container Runtime | Docker + Compose | — | Runs on AMD workstation (RTX 5090). See [08-hardware-requirements.md](08-hardware-requirements.md) |
 
