@@ -10,11 +10,11 @@ This document serves as both the **ingestion architecture** (pipeline design, en
 
 ## Data Quality Principles
 
-> **Core principle**: Prefer structured data sources (CIK numbers, XBRL, Capitol Trades API, CUSIP codes) over LLM extraction for critical relationships. LLM-extracted relationships carry lower confidence scores and compound errors across graph hops. See [00-strategic-rationale.md](00-strategic-rationale.md) § "Where This Platform Won't Have an Edge" → Data Quality at Scale.
+> **Core principle**: Prefer structured data sources (CIK numbers, SEC Company Facts API, Capitol Trades API, CUSIP codes) over LLM extraction for critical relationships. LLM-extracted relationships carry lower confidence scores and compound errors across graph hops. See [00-strategic-rationale.md](00-strategic-rationale.md) § "Where This Platform Won't Have an Edge" → Data Quality at Scale.
 
-1. **Ground-truth anchors > LLM extraction**: CIK, CUSIP, bioguide ID, SIC code, XBRL fact → always prefer structured identifiers
+1. **Ground-truth anchors > LLM extraction**: CIK, CUSIP, bioguide ID, SIC code, Company Facts API → always prefer structured identifiers
 2. **Government sources > third-party aggregators**: EDGAR over sec-api, Congress.gov over Capitol Trades, USASpending over contractor databases
-3. **Structured > unstructured**: XBRL over 10-K text parsing, XML ownership reports over news articles
+3. **Structured > unstructured**: SEC Company Facts API over 10-K text parsing, XML ownership reports over news articles
 4. **Multiple source corroboration**: A supply chain relationship extracted from a 10-K is stronger if confirmed by ImportYeti trade data
 5. **Staleness matters**: 13F data is 45 days old by definition. Macro data varies by indicator (GDP quarterly, employment monthly, fed funds rate daily). Tag data freshness on every node
 
@@ -100,7 +100,7 @@ Quiver has already parsed, ticker-matched, and aggregated many of the same raw g
 │  ┌──────────────────────────────────────────────────────────┐│
 │  │              Entity Extraction                           ││
 │  │     GraphRAG-SDK (Markdown → Entities + Relations)       ││
-│  │     Custom Parsers (XBRL, JSON → Structured nodes)       ││
+│  │     Company Facts API (JSON → Structured nodes)          ││
 │  └──────────────────────┬───────────────────────────────────┘│
 │                         │                                    │
 │                         ▼                                    │
@@ -132,12 +132,12 @@ Quiver has already parsed, ticker-matched, and aggregated many of the same raw g
 | Field | Detail |
 |-------|--------|
 | **URL** | https://www.sec.gov/cgi-bin/browse-edgar |
-| **API** | https://efts.sec.gov/LATEST/search-index (Full-Text Search), https://data.sec.gov/submissions/ (Company Submissions JSON), https://data.sec.gov/api/xbrl/ (XBRL data) |
+| **API** | https://efts.sec.gov/LATEST/search-index (Full-Text Search), https://data.sec.gov/submissions/ (Company Submissions JSON), https://data.sec.gov/api/xbrl/companyfacts/ (Company Facts API) |
 | **Pricing** | **Free** |
 | **Rate Limit** | 10 requests/second. Must include `User-Agent` header with company name, contact email |
 | **Auth** | None (public). User-Agent identification required |
-| **Format** | HTML, XML (XBRL), JSON (submissions API) |
-| **Fetch Method** | REST API. Use `data.sec.gov/submissions/CIK{cik}.json` for filing metadata. Download individual filings via accession number. Parse XBRL for structured financials. Use Full-Text Search API for keyword search across filings |
+| **Format** | HTML, JSON (submissions API, Company Facts API) |
+| **Fetch Method** | REST API. Use `data.sec.gov/submissions/CIK{cik}.json` for filing metadata. Download individual filings via accession number. Use the Company Facts API (`data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json`) for structured financials — returns all historical XBRL facts as JSON in one call, eliminating the need to parse XBRL from individual filings. Use Full-Text Search API for keyword search across filings |
 | **Key Data** | 10-K (annual), 10-Q (quarterly), 8-K (material events), DEF 14A (proxy), S-1 (IPO), 13F (institutional holdings — see Pipeline 7) |
 | **Graph Nodes** | `Company`, `Filing`, `Person` (executives from proxy) |
 | **Relationships** | `FILED`, `HAS_EXECUTIVE`, `MENTIONED_IN` |
@@ -145,7 +145,7 @@ Quiver has already parsed, ticker-matched, and aggregated many of the same raw g
 | **Python Libraries** | `sec-edgar-downloader`, `edgartools`, `sec-api` (paid wrapper) |
 | **Notes** | The single most important data source. All public US company data flows from here. Use the submissions API to get all filings for a company by CIK. Bulk download daily index files for initial seeding |
 
-#### SEC EDGAR XBRL — Structured Financial Data
+#### SEC EDGAR Company Facts API — Structured Financial Data
 
 | Field | Detail |
 |-------|--------|
@@ -158,7 +158,7 @@ Quiver has already parsed, ticker-matched, and aggregated many of the same raw g
 | **Key Data** | Revenue, net income, total assets, total liabilities, EPS, shares outstanding, operating cash flow — all directly from filings, no LLM extraction needed |
 | **Graph Nodes** | `Company` (snapshot metric updates), `Filing` |
 | **Relationships** | `FILED` (Company → Filing) |
-| **Notes** | **Prefer this over LLM extraction for financial data.** XBRL is machine-readable, audited, and authoritative. The bulk download is the fastest way to seed financial metrics for 5,000+ companies. This is the "ground-truth anchor" referenced in the schema design. Financial metrics are **written to DuckDB** (`financial_metrics` table, with `accession` column for provenance); latest snapshot values are recomputed onto the FalkorDB `Company` node properties. See [02-graph-schema.md](02-graph-schema.md) § Time Series Data Store |
+| **Notes** | **This is the primary source for structured financial data.** The Company Facts API returns all XBRL facts ever filed by a company as a single JSON payload — machine-readable, audited, and authoritative. One API call per CIK replaces the need to download and parse XBRL from individual filings. The bulk download (`companyfacts.zip` ~2GB) is the fastest way to seed financial metrics for 5,000+ companies. This is the "ground-truth anchor" referenced in the schema design. Financial metrics are **written to DuckDB** (`financial_metrics` table, with `accession` column for provenance); latest snapshot values are recomputed onto the FalkorDB `Company` node properties. See [02-graph-schema.md](02-graph-schema.md) § Time Series Data Store |
 
 #### SIC / NAICS Industry Classification (Tier 1)
 
@@ -186,14 +186,15 @@ Quiver has already parsed, ticker-matched, and aggregated many of the same raw g
 
 2. Download filing documents
    └── Primary document (HTML/XML) from filing URL
-   └── XBRL instance document (if available)
 
 3. Preprocess with MarkItDown
    └── Convert HTML filing → Markdown
    └── Preserve tables, headers, structure
 
-4. Extract structured data (custom XBRL parser)
-   └── Revenue, net income, EPS, total assets, total liabilities
+4. Fetch structured financial data (SEC Company Facts API)
+   └── GET https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json
+   └── Map US GAAP concepts (Revenues, NetIncomeLoss, EarningsPerShareDiluted, etc.) → metric_type names
+   └── Filter to 10-K FY entries; de-duplicate by earliest filing per period
    └── Write full time series → DuckDB (financial_metrics table, accession column preserved)
    └── Recompute Company snapshot metrics (revenue_ttm, pe_ratio, etc.) → FalkorDB Company node
    └── Extract SIC code → map to Industry/Sector nodes
@@ -216,9 +217,8 @@ Quiver has already parsed, ticker-matched, and aggregated many of the same raw g
 
 ### Key Considerations
 - **Rate limiting**: EDGAR requires `User-Agent` header with contact info. Max 10 requests/sec
-- **XBRL taxonomy mapping**: US GAAP tags (e.g., `us-gaap:Revenues`) → metric_type names
-- **Filing size**: 10-K filings can be 100+ pages. Summarize with LLM before embedding
-- **Bulk seeding**: Use the XBRL bulk download (`companyfacts.zip` ~2GB) for initial financial metric population — faster than per-company API calls. Load into DuckDB first, then recompute snapshots onto FalkorDB Company nodes
+- **XBRL concept mapping**: US GAAP concept names (e.g., `us-gaap:Revenues`) → metric_type names. The Company Facts API returns these as JSON keys — no XML parsing required
+- **Bulk seeding**: Use the Company Facts API bulk download (`companyfacts.zip` ~2GB) for initial financial metric population — faster than per-company API calls. Load into DuckDB first, then recompute snapshots onto FalkorDB Company nodes
 
 ---
 
@@ -519,7 +519,7 @@ Extract from **DEF 14A (Proxy Statement)**:
 
 | Extraction Method | Base Confidence | Rationale |
 |-------------------|-----------------|-----------|
-| XBRL structured field | 0.95–1.0 | Machine-readable, authoritative |
+| Company Facts API field | 0.95–1.0 | Machine-readable, authoritative |
 | SEC table extraction | 0.90–0.95 | Structured but OCR errors possible |
 | 10-K "Principal Suppliers" LLM extraction | 0.80–0.90 | Disclosed requirement, high signal |
 | 10-K "Risk Factors" LLM extraction | 0.70–0.85 | Narrative, some interpretation needed |
@@ -1212,7 +1212,7 @@ If the platform evolves to consume **push-based / webhook feeds** (e.g., EDGAR's
 |------------|----------------------|------------------------|
 | **Company** | EDGAR (T0), FMP (T0) | ImportYeti (T1), Company websites |
 | **Filing** | EDGAR (T0) | Investor presentations / IR PDFs (T1) |
-| **DuckDB (financial_metrics)** | EDGAR XBRL (T0), FMP (T0) — full time series + provenance via `accession` column | BLS (T2), Short interest (T3), Dark pool volume (T3), Google Trends (T4) |
+| **DuckDB (financial_metrics)** | EDGAR Company Facts API (T0), FMP (T0) — full time series + provenance via `accession` column | BLS (T2), Short interest (T3), Dark pool volume (T3), Google Trends (T4) |
 | **NewsArticle** | Marketaux (T0), GNews (T0) | IR press releases (T1), NewsAPI (T0), CNBC picks (T4) |
 | **Industry / Sector** | EDGAR SIC (T1), FMP GICS (T0) | — |
 | **Person** | EDGAR proxy (T0), Form 4 (T3) | LinkedIn (manual) |
@@ -1231,7 +1231,7 @@ If the platform evolves to consume **push-based / webhook feeds** (e.g., EDGAR's
 
 | Category | Sources | Annual Cost |
 |----------|---------|-------------|
-| **Completely Free** | EDGAR, EDGAR XBRL, FRED, Congress.gov, USASpending, BLS, BEA, World Bank, IMF, OpenFIGI, Federal Register, PatentsView, LDA (lobbying) | **$0** |
+| **Completely Free** | EDGAR, EDGAR Company Facts API, FRED, Congress.gov, USASpending, BLS, BEA, World Bank, IMF, OpenFIGI, Federal Register, PatentsView, LDA (lobbying) | **$0** |
 | **Freemium (free tier sufficient for Phase 0-1)** | FMP, Marketaux, GNews, CoinGecko, BLS registered | **$0** for Phase 0-1 |
 | **Recommended paid (production)** | FMP Starter ($14/mo), Marketaux Standard ($29/mo) | **~$516/yr** |
 | **Optional paid** | Quiver Quant ($10-30/mo), Unusual Whales ($57/mo) | **~$500-1,000/yr** |
@@ -1264,12 +1264,12 @@ If the platform evolves to consume **push-based / webhook feeds** (e.g., EDGAR's
 
 ### Phase 0 (Data Foundation — 50 companies, 2-3 weeks)
 1. **EDGAR** — 10-K, 10-Q for 50 semiconductor companies (fetch, parse, LLM-extract entities/relationships)
-2. **EDGAR XBRL** — Financial metrics for those 50 companies → written to DuckDB `financial_metrics` table (via `timeseries.py`); latest snapshot recomputed onto FalkorDB Company nodes
+2. **EDGAR Company Facts API** — Financial metrics for those 50 companies → written to DuckDB `financial_metrics` table (via `timeseries.py`); latest snapshot recomputed onto FalkorDB Company nodes
 3. **DuckDB initialization** — `financial_timeseries.duckdb` created with full schema (`financial_metrics` + `macro_timeseries`) during Phase 0 infrastructure setup. Phase 2 pipelines (FMP, FRED) write to this same store without schema changes
 4. **FMP (free tier)** — Company profiles, prices, sector/industry (optional, lower priority than SEC extraction)
 
 ### Phase 1-2 (Core graph — 500 companies)
-5. **EDGAR XBRL bulk download** — All company financials
+5. **EDGAR Company Facts API bulk download** — All company financials
 6. **EDGAR 13F** — Top 50 institutional holders
 7. **OpenFIGI** — CUSIP mapping for 13F parsing
 8. **SIC/NAICS** — Industry classification from EDGAR

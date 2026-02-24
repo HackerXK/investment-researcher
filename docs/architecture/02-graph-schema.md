@@ -26,7 +26,7 @@ The graph is intentionally broad — it captures not only company-level data but
    - Agent system applies a 0.9 per-hop discount factor when reasoning across hops.
    - Findings beyond 3 hops require corroboration from a second data source.
 
-3. **Prefer structured over extracted**: For critical relationships (supply chain, financial ties), prefer data from structured sources (SEC filings, XBRL, Capitol Trades API) over LLM-extracted relationships. LLM-extracted relationships should carry lower confidence scores.
+3. **Prefer structured over extracted**: For critical relationships (supply chain, financial ties), prefer data from structured sources (SEC Company Facts API, Capitol Trades API) over LLM-extracted relationships. LLM-extracted relationships should carry lower confidence scores.
 
 4. **Confidence scoring on all edges**: Every relationship carries a `confidence` property (0.0–1.0). Agent reasoning discounts low-confidence edges and flags them in reports.
 
@@ -435,7 +435,7 @@ This is what separates institutional-grade research from surface-level analysis.
 | Property | Phase 0 (Manual) | Phase 2+ (Automated) | Data Source |
 |----------|------------------|----------------------|-------------|
 | `confidence` | ✓ Manual estimate | LLM multi-source scoring | Filing text + news corroboration |
-| `source` | ✓ "10-K 2024" | Full citation with page | XBRL metadata + document parser |
+| `source` | ✓ "10-K 2024" | Full citation with page | Company Facts API metadata + document parser |
 | `description` | ✓ Hand-written for seed edges | LLM-generated at ingestion time | Source paragraph(s) the relationship was extracted from — passed as context to the LLM |
 | `product_category` | ✓ Hand-coded | LLM extraction | "Principal Suppliers" section |
 | `dependency_level` | ✓ Domain knowledge | LLM + keyword detection | "Risk Factors" mentions of "sole source", "critical" |
@@ -766,7 +766,7 @@ ORDER BY date DESC LIMIT 60;
 
 ```
            ┌──────────────┐
-           │ Data Sources  │  (EDGAR XBRL, FMP, Polygon, FRED, BLS, ...)
+           │ Data Sources  │  (EDGAR Company Facts API, FMP, Polygon, FRED, BLS, ...)
            └──────┬───────┘
                   │
                   ▼

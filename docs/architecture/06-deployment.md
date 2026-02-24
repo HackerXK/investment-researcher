@@ -211,7 +211,7 @@ investment-researcher/
 │       │   │   └── policy.py         # Government & policy pipeline
 │       │   └── loaders/
 │       │       ├── __init__.py
-│       │       ├── xbrl.py       # XBRL parser
+│       │       ├── company_facts.py  # SEC Company Facts API fetcher
 │       │       └── structured.py # Structured data → Cypher loader
 │       │
 │       ├── agents/

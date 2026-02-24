@@ -340,7 +340,7 @@ dependencies = [
     "aiohttp>=3.9.0",
     
     # Document processing
-    "python-xbrl>=1.0.0",     # SEC XBRL parsing
+    # python-xbrl removed — using SEC Company Facts API (JSON) instead of parsing XBRL directly
     
     # Data source APIs
     "congress-api>=0.1.0",    # Congress.gov API wrapper

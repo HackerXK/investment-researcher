@@ -59,13 +59,13 @@ Foundation   Extraction   Data         Enrichment   System       Automate     Ex
 
 ## Phase 0: Data Foundation (Week 1-3)
 
-**Goal**: Establish the project's permanent structure, graph schema, CLI framework, and SEC EDGAR data extraction pipeline. All data comes from real sources (SEC filings, XBRL) — no hand-seeded toy data. See [00-strategic-rationale.md](00-strategic-rationale.md) § Data Quality First.
+**Goal**: Establish the project's permanent structure, graph schema, CLI framework, and SEC EDGAR data extraction pipeline. All data comes from real sources (SEC filings, Company Facts API) — no hand-seeded toy data. See [00-strategic-rationale.md](00-strategic-rationale.md) § Data Quality First.
 
 ### Scope
 - ~50 companies in the **semiconductor** sector + their supply chain
 - **SEC EDGAR pipeline**: Fetch and parse 10-K filings for target companies
 - **Entity and relationship extraction**: LLM-based extraction from filing text → rich graph nodes and edges
-- **XBRL financial data**: Structured extraction of revenue, net income, EPS from filing XBRL
+- **SEC Company Facts API**: Structured financial data (revenue, net income, EPS, etc.) fetched via `data.sec.gov/api/xbrl/companyfacts/` — one API call per CIK returns all historical XBRL facts as JSON, eliminating the need to parse XBRL from individual filings
 - OpenAI API primary; optionally test local LLM on RTX 5090 (Qwen 2.5 32B) for extraction quality comparison
 - Minimal infrastructure (FalkorDB + DuckDB + CLI on AMD workstation)
 - **Full production structure from day one** — scope is narrow, but code is in its final home
@@ -87,7 +87,7 @@ Foundation   Extraction   Data         Enrichment   System       Automate     Ex
 > **Purpose**: Provide a web-based interface to browse and visualize all financial data stored in DuckDB. Select a company and see its key financial metrics over time — revenue, EPS, margins, balance sheet ratios — with interactive charts and tables. Uses only Phase 0 infrastructure (DuckDB + CLI); no external service dependencies beyond FastAPI/Uvicorn.
 
 - [ ] Analytics layer that queries DuckDB and computes derived metrics on the fly:
-  - Auto-detects each company's fiscal year-end month (XBRL comparatives mix quarterly data into the annual bucket; must filter correctly)
+  - Auto-detects each company's fiscal year-end month (Company Facts API data includes comparative and quarterly values mixed into annual filings; must filter correctly)
   - Annual and quarterly time series with YoY/QoQ growth computed via SQL window functions per [02-graph-schema.md](02-graph-schema.md) § Growth Rate Strategy
   - Derived metrics: gross/operating/net margins, EPS trends, debt-to-equity, ROE, ROA
   - Note: true P/E ratio deferred to Phase 2 (requires FMP market price data)
@@ -117,13 +117,23 @@ Foundation   Extraction   Data         Enrichment   System       Automate     Ex
   - [ ] Executive/board extraction from filing headers and DEF 14A — **MUST populate HAS_EXECUTIVE and HAS_BOARD_MEMBER edge properties** per [02-graph-schema.md](02-graph-schema.md) § Company ↔ People: `title`, `start_date`, `end_date`, `compensation_usd`, `stock_ownership_pct`, `source`, `last_confirmed`, `description` (for executives); `role`, `committee`, `is_independent`, `start_date`, `end_date`, `stock_ownership_shares`, `source`, `last_confirmed`, `description` (for board members)
   - [ ] Industry/sector classification — use SIC from EDGAR submissions JSON, map to Industry/Sector nodes per [03-data-ingestion.md](03-data-ingestion.md) § SIC/NAICS source table. Create OPERATES_IN (with `revenue_pct`, `is_primary`) and BELONGS_TO relationships per [02-graph-schema.md](02-graph-schema.md) § Company ↔ Industry / Sector
   - [ ] Risk factor categorization (geopolitical, regulatory, supply chain, financial)
-- [ ] XBRL parser for structured financial data (revenue, net income, EPS, etc.) — **prefer XBRL over LLM extraction** per [03-data-ingestion.md](03-data-ingestion.md) § XBRL source notes and [02-graph-schema.md](02-graph-schema.md) § Confidence & Data Quality Principles ("prefer structured over extracted")
+- [ ] SEC Company Facts API fetcher for structured financial data (revenue, net income, EPS, etc.) — one `GET` per CIK to `data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json` returns all historical facts as JSON. **Prefer this over LLM extraction** per [03-data-ingestion.md](03-data-ingestion.md) § XBRL source notes and [02-graph-schema.md](02-graph-schema.md) § Confidence & Data Quality Principles ("prefer structured over extracted")
+  - Map US GAAP concept names (e.g. `Revenues`, `NetIncomeLoss`, `EarningsPerShareDiluted`) → our `metric_type` names
+  - Filter to 10-K FY entries; de-duplicate by keeping the earliest filing per period to avoid restated comparatives
   - Write full time series → DuckDB `financial_metrics` table (via `timeseries.py`), `accession` column preserved for provenance, per [02-graph-schema.md](02-graph-schema.md) § Time Series Data Store
   - Generate `summary`, `risk_factors`, `opportunities` on Company node via LLM extraction from 10-K text; update `last_updated`
   - `market_cap` is populated in Phase 2 (requires price feed from FMP); leave null in Phase 0
 - [ ] Filing → FalkorDB loader: create Filing nodes (keyed on `accession_number`), link to Company via `FILED` relationship, populate edge properties. Use MERGE operations per [03-data-ingestion.md](03-data-ingestion.md) § Pipeline 1 step 7
 - [ ] Ingestion state tracking (SQLite) — track which filings have been fetched/parsed/loaded
 - [ ] CLI commands: `ingest edgar --ticker AAPL`, `ingest edgar --list top50`
+
+#### Financial Data Validation & Testing
+> **Purpose**: Ensure that financial metrics fetched from the SEC Company Facts API and stored in DuckDB are correct, and that derived metrics (margins, growth rates, ratios) computed by the analytics layer are mathematically accurate. Tests should cover internal consistency, time-series sanity (no duplicate periods, monotonic dates), and — critically — cross-validation against the SEC Company Facts API itself to confirm that stored values match the authoritative source.
+
+- [ ] Unit tests for the analytics layer: verify margin, growth-rate, and ratio calculations against hand-computed expected values
+- [ ] Data integrity tests on the DuckDB store: no duplicate (ticker, metric, period) rows, no NULL values in required columns, fiscal year-end filtering produces exactly one row per year
+- [ ] **Third-party cross-validation test**: for at least two ingested tickers, fetch the same metrics (revenue, net income, EPS) from a reputable public source and assert they match the values stored in DuckDB within an acceptable tolerance (e.g. ≤1% difference to account for rounding)
+- [ ] Test runner invocable via `pytest tests/` — all financial-validation tests are part of the standard test suite
 
 #### Agent Tools & Basic Agent (For Interactive Querying)
 > **Implementation spec**: Tool signatures **MUST match** [04-agent-system.md](04-agent-system.md) § Agent Tools — exact function names, parameter names, types, and docstrings. Agent definition **MUST match** [04-agent-system.md](04-agent-system.md) § 3. Ripple Effect Analyzer.
@@ -140,7 +150,7 @@ Foundation   Extraction   Data         Enrichment   System       Automate     Ex
 #### Data Extraction Quality
 - [ ] `ingest edgar --ticker AAPL` fetches 10-K filing, extracts entities/relationships, and loads into FalkorDB
 - [ ] Extracted SUPPLIES_TO relationships have rich edge properties: product_category, dependency_level, is_sole_source, source (with accession number)
-- [ ] XBRL parser writes financial metrics to DuckDB (`financial_metrics` table) with provenance
+- [ ] Company Facts API fetcher writes financial metrics to DuckDB (`financial_metrics` table) with provenance
 - [ ] `SELECT COUNT(*) FROM financial_metrics` → rows present for all ingested companies
 - [ ] Spot-check: compare LLM-extracted supply chain data against manually reading the same 10-K section — extraction should capture the key relationships disclosed in the filing
 - [ ] At least 10 companies with SEC-extracted data in the graph
@@ -157,9 +167,14 @@ Foundation   Extraction   Data         Enrichment   System       Automate     Ex
 
 #### Financial Dashboard
 - [ ] `ir web` launches dashboard; selecting any ingested ticker shows its financial data
-- [ ] Annual revenue chart shows correct fiscal-year values (not polluted by XBRL quarterly comparatives)
+- [ ] Annual revenue chart shows correct fiscal-year values (not polluted by quarterly comparatives from Company Facts API data)
 - [ ] Computed metrics (margins, growth rates, balance sheet ratios) are mathematically accurate
 - [ ] Dashboard renders all charts and tables in the browser without errors
+
+#### Financial Data Validation
+- [ ] All analytics unit tests pass (`pytest tests/`)
+- [ ] Third-party cross-validation passes for at least two tickers — computed revenue, net income, and EPS match a reputable source within ≤1% tolerance
+- [ ] No data-integrity failures: no duplicate periods, no NULL required fields, fiscal-year filtering is correct
 
 ### Decision Framework
 
@@ -187,7 +202,7 @@ investment-researcher/
 │       │   ├── edgar/
 │       │   │   ├── fetcher.py    ✓  (EDGAR filing fetcher — 10-K, 10-Q, 8-K download)
 │       │   │   ├── parser.py     ✓  (HTML → markdown, section splitting)
-│       │   │   ├── xbrl.py       ✓  (XBRL financial data extraction)
+│       │   │   ├── company_facts.py ✓  (SEC Company Facts API fetcher — replaces XBRL parsing)
 │       │   │   └── extractor.py  ✓  (LLM-based entity/relationship extraction from filing text)
 │       │   ├── loader.py         ✓  (Filing → FalkorDB node/edge writer)
 │       │   ├── timeseries.py     ✓  (DuckDB writer: financial_metrics + macro_timeseries tables, recompute_snapshot)
@@ -204,12 +219,16 @@ investment-researcher/
 │           │   └── timeseries_tools.py ✓  (get_financial_history — queries DuckDB; Phase 4 expands)
 │           └── definitions/
 │               └── ripple_effect.py ✓ (single OpenAI Agents SDK agent — Phase 4 adds more agents here)
+├── tests/
+│   ├── test_analytics.py         ✓  (unit tests for margin/growth/ratio calculations)
+│   ├── test_data_integrity.py    ✓  (DuckDB uniqueness, NULLs, FY-end filtering)
+│   └── test_crossvalidation.py   ✓  (compare DuckDB values vs third-party source)
 ├── cli.py                        ✓  (Typer: chat, ingest edgar, web — Phase 1 adds health)
 ├── README.md                     ✓  (setup, CLI usage, database debugging guide)
 ├── data/
 │   ├── falkordb/                 ✓  (bind mount target — consistent with Phase 1+)
 │   ├── duckdb/
-│   │   └── financial_timeseries.duckdb ✓  (financial_metrics + macro_timeseries tables, seeded from XBRL)
+│   │   └── financial_timeseries.duckdb ✓  (financial_metrics + macro_timeseries tables, seeded from Company Facts API)
 │   └── raw/filings/              ✓  (downloaded SEC filings — HTML/XML)
 └── docs/data-quality-report.md   ✓  (SEC extraction accuracy, spot-check results)
 ```
@@ -285,7 +304,7 @@ cli.py                        ← Phase 0 (expanded: health command added)
 ### Tasks
 > **Implementation spec**: Financial data pipeline **MUST follow** [03-data-ingestion.md](03-data-ingestion.md) § Pipeline 2: Financial Data APIs. DuckDB schema was established in Phase 0 — all writes here use the same `timeseries.py` module via `write_financial_metrics()`. Growth rates are **computed at query time** via SQL window functions, NOT precomputed — see [02-graph-schema.md](02-graph-schema.md) § Growth Rate Strategy.
 
-- [ ] SEC EDGAR pipeline — **scale from Phase 0** (fetcher, parser, XBRL, DuckDB write, and snapshot recompute already exist):
+- [ ] SEC EDGAR pipeline — **scale from Phase 0** (fetcher, parser, Company Facts API, DuckDB write, and snapshot recompute already exist):
   - [ ] Scale extraction to S&P 100 companies
   - [ ] Improve extraction prompts based on Phase 0 accuracy results
   - [ ] GraphRAG-SDK entity extraction from filings (augment LLM-based extraction from Phase 0)
@@ -330,7 +349,7 @@ src/investment_researcher/ingestion/
 │   ├── macro.py               ✓  (FRED + World Bank / IMF)
 │   └── upload.py              ✓ (from Phase 1)
 └── loaders/
-    ├── xbrl.py                ✓
+│   ├── company_facts.py        ✓
     └── structured.py          ✓
 ```
 
@@ -363,7 +382,7 @@ src/investment_researcher/ingestion/
   - [ ] From 10-K "Customers" / "Suppliers" sections (text mining) — extract from Item 1, Item 1A, Note 14/15 per [03-data-ingestion.md](03-data-ingestion.md) § SUPPLIES_TO Edges
   - [ ] From publicly available supply chain databases (ImportYeti per [03-data-ingestion.md](03-data-ingestion.md) § Company Supply Chain source table)
   - [ ] From news articles mentioning supply relationships
-  - [ ] **Populate edge properties**: `product_category`, `dependency_level`, `is_sole_source`, `revenue_pct`, `contract_value_usd`, `volume_estimate`, `geographic_risk`, `alternative_suppliers`, `lead_time_weeks`, `confidence`, `source`, `last_confirmed`, `created_at`, `valid_from`, `valid_to`, `description` (LLM-generated narrative). Apply **confidence scoring by source** per [03-data-ingestion.md](03-data-ingestion.md) § Confidence Scoring by Source table (XBRL: 0.95-1.0, 10-K suppliers: 0.80-0.90, Risk Factors: 0.70-0.85, News: 0.60-0.75)
+  - [ ] **Populate edge properties**: `product_category`, `dependency_level`, `is_sole_source`, `revenue_pct`, `contract_value_usd`, `volume_estimate`, `geographic_risk`, `alternative_suppliers`, `lead_time_weeks`, `confidence`, `source`, `last_confirmed`, `created_at`, `valid_from`, `valid_to`, `description` (LLM-generated narrative). Apply **confidence scoring by source** per [03-data-ingestion.md](03-data-ingestion.md) § Confidence Scoring by Source table (Company Facts API: 0.95-1.0, 10-K suppliers: 0.80-0.90, Risk Factors: 0.70-0.85, News: 0.60-0.75)
 - [ ] Executive/board member linking — **use extraction strategy from [03-data-ingestion.md](03-data-ingestion.md) § HAS_EXECUTIVE / HAS_BOARD_MEMBER Edges** (parse DEF 14A tables structurally, not via LLM, per doc recommendation for Summary Compensation Table):
   - [ ] Extract from DEF 14A (proxy statement) filings
   - [ ] **Populate HAS_EXECUTIVE edge properties** per [02-graph-schema.md](02-graph-schema.md): `title`, `start_date`, `end_date`, `compensation_usd`, `stock_ownership_pct`, `source`, `last_confirmed`, `description`
@@ -753,7 +772,7 @@ src/investment_researcher/
 
 | Phase | Duration | Key Milestone |
 |-------|----------|---------------|
-| 0. Data Foundation | Week 1-3 | Graph schema, SEC EDGAR extraction pipeline, XBRL financials. Data quality is the validation |
+| 0. Data Foundation | Week 1-3 | Graph schema, SEC EDGAR extraction pipeline, Company Facts API financials. Data quality is the validation |
 | 1. Foundation + Local LLM | Week 4-5 | Docker on AMD workstation, observability, GraphRAG-SDK, improved extraction. Optional: RTX 5090 local inference (Qwen 32B) |
 | 2. Ingestion MVP | Week 6-8 | Scale to 100 companies + G20 countries. DuckDB time series, financial data APIs, macro indicators |
 | 3. Relationships | Week 9-11 | Supply chain, executives, news, Congressional trades, IR pages/press releases (Tier 1). 13F + legislation deferred to Phase 5 |

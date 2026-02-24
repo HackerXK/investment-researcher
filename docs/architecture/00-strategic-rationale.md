@@ -204,7 +204,7 @@ If hop 1 has 90% entity resolution accuracy:
 
 **Mitigation**: 
 - Use CIK numbers, bioguide IDs, CUSIP codes, and ticker symbols as ground-truth anchors wherever possible
-- Prefer structured data sources (Capitol Trades API, EDGAR XBRL) over LLM extraction for critical relationships
+- Prefer structured data sources (Capitol Trades API, EDGAR Company Facts API) over LLM extraction for critical relationships
 - Validate LLM-extracted relationships against structured sources
 - Include confidence scores on all edges and discount low-confidence hops in agent reasoning
 
