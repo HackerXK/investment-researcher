@@ -10,11 +10,11 @@ This document serves as both the **ingestion architecture** (pipeline design, en
 
 ## Data Quality Principles
 
-> **Core principle**: Prefer structured data sources (CIK numbers, SEC Company Facts API, Capitol Trades API, CUSIP codes) over LLM extraction for critical relationships. LLM-extracted relationships carry lower confidence scores and compound errors across graph hops. See [00-strategic-rationale.md](00-strategic-rationale.md) § "Where This Platform Won't Have an Edge" → Data Quality at Scale.
+> **Core principle**: Prefer structured data sources (CIK numbers, edgartools structured financial data, Capitol Trades API, CUSIP codes) over LLM extraction for critical relationships. LLM-extracted relationships carry lower confidence scores and compound errors across graph hops. See [00-strategic-rationale.md](00-strategic-rationale.md) § "Where This Platform Won't Have an Edge" → Data Quality at Scale.
 
-1. **Ground-truth anchors > LLM extraction**: CIK, CUSIP, bioguide ID, SIC code, Company Facts API → always prefer structured identifiers
+1. **Ground-truth anchors > LLM extraction**: CIK, CUSIP, bioguide ID, SIC code, edgartools financial data → always prefer structured identifiers
 2. **Government sources > third-party aggregators**: EDGAR over sec-api, Congress.gov over Capitol Trades, USASpending over contractor databases
-3. **Structured > unstructured**: SEC Company Facts API over 10-K text parsing, XML ownership reports over news articles
+3. **Structured > unstructured**: edgartools structured financial data (`get_financials()`, `get_facts()`) over 10-K text parsing, XML ownership reports over news articles
 4. **Multiple source corroboration**: A supply chain relationship extracted from a 10-K is stronger if confirmed by ImportYeti trade data
 5. **Staleness matters**: 13F data is 45 days old by definition. Macro data varies by indicator (GDP quarterly, employment monthly, fed funds rate daily). Tag data freshness on every node
 
@@ -93,14 +93,14 @@ Quiver has already parsed, ticker-matched, and aggregated many of the same raw g
 │         ▼               ▼                 ▼                  │
 │  ┌──────────────────────────────────────────────────────────┐│
 │  │              Document Preprocessor                       ││
-│  │     MarkItDown (PDF, DOCX, HTML → Markdown)              ││
+│  │     Docling (PDF, DOCX, HTML → Markdown)                    ││
 │  └──────────────────────┬───────────────────────────────────┘│
 │                         │                                    │
 │                         ▼                                    │
 │  ┌──────────────────────────────────────────────────────────┐│
 │  │              Entity Extraction                           ││
 │  │     GraphRAG-SDK (Markdown → Entities + Relations)       ││
-│  │     Company Facts API (JSON → Structured nodes)          ││
+│  │     edgartools (Structured financial data → nodes)       ││
 │  └──────────────────────┬───────────────────────────────────┘│
 │                         │                                    │
 │                         ▼                                    │
@@ -132,33 +132,18 @@ Quiver has already parsed, ticker-matched, and aggregated many of the same raw g
 | Field | Detail |
 |-------|--------|
 | **URL** | https://www.sec.gov/cgi-bin/browse-edgar |
-| **API** | https://efts.sec.gov/LATEST/search-index (Full-Text Search), https://data.sec.gov/submissions/ (Company Submissions JSON), https://data.sec.gov/api/xbrl/companyfacts/ (Company Facts API) |
+| **API** | Via **edgartools** — wraps all SEC EDGAR endpoints internally (Full-Text Search, Company Submissions, XBRL facts/financials). No raw API calls needed |
 | **Pricing** | **Free** |
 | **Rate Limit** | 10 requests/second. Must include `User-Agent` header with company name, contact email |
 | **Auth** | None (public). User-Agent identification required |
-| **Format** | HTML, JSON (submissions API, Company Facts API) |
-| **Fetch Method** | REST API. Use `data.sec.gov/submissions/CIK{cik}.json` for filing metadata. Download individual filings via accession number. Use the Company Facts API (`data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json`) for structured financials — returns all historical XBRL facts as JSON in one call, eliminating the need to parse XBRL from individual filings. Use Full-Text Search API for keyword search across filings |
+| **Format** | edgartools returns structured Python objects; raw formats are HTML, JSON, XML (handled internally) |
+| **Fetch Method** | **Via edgartools Python library.** `Company("AAPL")` or `Company("0000320193")` for company lookup. `company.get_filings(form="10-K")` for filing access. `company.get_financials()` for parsed income statement, balance sheet, cash flow as DataFrames. `company.get_facts()` for all historical XBRL data. `filing.markdown()` for LLM-ready content. `filing.obj()` for typed data objects. `find(query, form=...)` for full-text search. See [05-tech-stack.md](05-tech-stack.md) § edgartools Deep Dive for full API reference |
 | **Key Data** | 10-K (annual), 10-Q (quarterly), 8-K (material events), DEF 14A (proxy), S-1 (IPO), 13F (institutional holdings — see Pipeline 7) |
 | **Graph Nodes** | `Company`, `Filing`, `Person` (executives from proxy) |
 | **Relationships** | `FILED`, `HAS_EXECUTIVE`, `MENTIONED_IN` |
 | **Update Frequency** | Filings posted within hours of submission. Daily index files available |
-| **Python Libraries** | `sec-edgar-downloader`, `edgartools`, `sec-api` (paid wrapper) |
-| **Notes** | The single most important data source. All public US company data flows from here. Use the submissions API to get all filings for a company by CIK. Bulk download daily index files for initial seeding |
-
-#### SEC EDGAR Company Facts API — Structured Financial Data
-
-| Field | Detail |
-|-------|--------|
-| **URL** | https://data.sec.gov/api/xbrl/companyfacts/ |
-| **API** | `https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json` (all facts for a company), `https://data.sec.gov/api/xbrl/companyconcept/CIK{cik}/us-gaap/{concept}.json` (specific concept) |
-| **Pricing** | **Free** |
-| **Rate Limit** | Same as EDGAR: 10 req/sec |
-| **Format** | JSON |
-| **Fetch Method** | REST API. Each company has a `companyfacts` endpoint returning all reported XBRL facts. Bulk download available at `https://efts.sec.gov/LATEST/bulk-data/companyfacts.zip` (~2GB) |
-| **Key Data** | Revenue, net income, total assets, total liabilities, EPS, shares outstanding, operating cash flow — all directly from filings, no LLM extraction needed |
-| **Graph Nodes** | `Company` (snapshot metric updates), `Filing` |
-| **Relationships** | `FILED` (Company → Filing) |
-| **Notes** | **This is the primary source for structured financial data.** The Company Facts API returns all XBRL facts ever filed by a company as a single JSON payload — machine-readable, audited, and authoritative. One API call per CIK replaces the need to download and parse XBRL from individual filings. The bulk download (`companyfacts.zip` ~2GB) is the fastest way to seed financial metrics for 5,000+ companies. This is the "ground-truth anchor" referenced in the schema design. Financial metrics are **written to DuckDB** (`financial_metrics` table, with `accession` column for provenance); latest snapshot values are recomputed onto the FalkorDB `Company` node properties. See [02-graph-schema.md](02-graph-schema.md) § Time Series Data Store |
+| **Python Libraries** | **`edgartools`** (primary and sole SEC library). Provides structured Python objects for all filing types, financial statements (XBRL), filing content extraction (`.markdown()`, `.html()`), full-text search, 13F holdings, insider trades, proxy statements, and more. Replaces `sec-edgar-downloader`, `sec-api`, and raw EDGAR API calls. Free, MIT licensed, no API keys. See [05-tech-stack.md](05-tech-stack.md) § edgartools Deep Dive |
+| **Notes** | The single most important data source. All public US company data flows from here. **All SEC data access goes through edgartools** — do not use raw EDGAR API calls or other SEC libraries unless edgartools does not support the specific functionality needed. edgartools handles rate limiting, User-Agent headers, filing parsing, and XBRL extraction automatically. **Structured financial data** (revenue, net income, EPS, total assets, etc.) is accessed via `company.get_financials()` (parsed statements as DataFrames) and `company.get_facts()` (all historical XBRL data). Machine-readable, audited, and authoritative — this is the "ground-truth anchor" referenced in the schema design. Financial metrics are **written to DuckDB** (`financial_metrics` table, with `accession` column for provenance); latest snapshot values are recomputed onto the FalkorDB `Company` node properties. See [02-graph-schema.md](02-graph-schema.md) § Time Series Data Store |
 
 #### SIC / NAICS Industry Classification (Tier 1)
 
@@ -166,7 +151,7 @@ Quiver has already parsed, ticker-matched, and aggregated many of the same raw g
 |-------|--------|
 | **URL** | https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany (SIC from EDGAR), https://www.census.gov/naics/ (NAICS) |
 | **Pricing** | **Free** |
-| **Fetch Method** | Extract SIC code from EDGAR company submissions (`data.sec.gov/submissions/CIK{cik}.json` → `sic` field). Map SIC to sector/industry using standard SIC tables. Alternatively, use FMP profiles for GICS classification |
+| **Fetch Method** | **Via edgartools**: `company = Company("AAPL")` → `company.industry` returns the company's industry classification. SIC code is available from the company object. Map SIC to sector/industry using standard SIC tables. Alternatively, use FMP profiles for GICS classification |
 | **Key Data** | SIC code, SIC description, sector, industry group |
 | **Graph Nodes** | `Industry`, `Sector` |
 | **Relationships** | `OPERATES_IN` (Company → Industry), `BELONGS_TO` (Industry → Sector) |
@@ -175,34 +160,44 @@ Quiver has already parsed, ticker-matched, and aggregated many of the same raw g
 ### Cadence
 - **Daily batch**: Check for new filings for all tracked companies
 - **Backfill**: Initial load of historical filings (last 3-5 years)
+- **Local storage**: All SEC data is stored locally via edgartools local storage for offline operation and maximum performance. See [05-tech-stack.md](05-tech-stack.md) § edgartools Local Storage
 
 ### Pipeline Steps
 
 ```
-1. Fetch filing index for each tracked CIK
-   └── GET https://data.sec.gov/submissions/CIK{cik}.json
-   └── Filter for form types: 10-K, 10-Q, 8-K, DEF 14A, SC 13D
-   └── Skip already-processed accession numbers
+1. Fetch filings for each tracked company (via edgartools)
+   └── company = Company(ticker_or_cik)
+   └── filings = company.get_filings(form=["10-K", "10-Q", "8-K", "DEF 14A", "SC 13D"])
+   └── Skip already-processed accession numbers (check against SQLite state)
 
-2. Download filing documents
-   └── Primary document (HTML/XML) from filing URL
+2. Extract filing content as markdown (via edgartools)
+   └── filing.markdown() → LLM-ready markdown text
+   └── No Docling needed — edgartools handles HTML → markdown natively
+   └── filing.obj() → typed data object for structured extraction (10-K: subsidiaries, auditor;
+       DEF 14A: exec compensation, board; 8-K: event items)
+   └── Filing content served from local storage (no network requests)
+   └── Populate `file_path` on the Filing node with the local edgartools storage path
 
-3. Preprocess with MarkItDown
-   └── Convert HTML filing → Markdown
-   └── Preserve tables, headers, structure
-
-4. Fetch structured financial data (SEC Company Facts API)
-   └── GET https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json
+3. Fetch structured financial data (via edgartools)
+   └── company.get_financials() → parsed income statement, balance sheet, cash flow as DataFrames
+   └── company.get_facts() → all historical XBRL data (for granular concept-level queries)
    └── Map US GAAP concepts (Revenues, NetIncomeLoss, EarningsPerShareDiluted, etc.) → metric_type names
    └── Filter to 10-K FY entries; de-duplicate by earliest filing per period
    └── Write full time series → DuckDB (financial_metrics table, accession column preserved)
    └── Recompute Company snapshot metrics (revenue_ttm, pe_ratio, etc.) → FalkorDB Company node
-   └── Extract SIC code → map to Industry/Sector nodes
+   └── company.industry → extract SIC code → map to Industry/Sector nodes
 
-5. Extract entities & relationships (GraphRAG-SDK)
-   └── Feed markdown to GraphRAG-SDK
+4. Parse structured data from typed filing objects (via edgartools)
+   └── 10-K: tenk = filing.obj() → tenk.subsidiaries, tenk.auditor
+   └── DEF 14A: proxy = filing.obj() → proxy.executive_compensation, proxy.peo_total_comp
+   └── 8-K: eightk = filing.obj() → eightk.items (structured event data)
+   └── Use structured data where available (higher confidence than LLM extraction)
+
+5. Extract entities & relationships (GraphRAG-SDK from markdown)
+   └── Feed filing.markdown() output to GraphRAG-SDK
    └── Auto-detect: mentioned companies, executives, products,
        supply chain references, risk factors, legal proceedings
+   └── Supplement with edgartools structured data (step 4) for higher-confidence edges
 
 6. Entity resolution
    └── Match extracted company names → existing Company nodes (by CIK/ticker)
@@ -216,9 +211,10 @@ Quiver has already parsed, ticker-matched, and aggregated many of the same raw g
 ```
 
 ### Key Considerations
-- **Rate limiting**: EDGAR requires `User-Agent` header with contact info. Max 10 requests/sec
-- **XBRL concept mapping**: US GAAP concept names (e.g., `us-gaap:Revenues`) → metric_type names. The Company Facts API returns these as JSON keys — no XML parsing required
-- **Bulk seeding**: Use the Company Facts API bulk download (`companyfacts.zip` ~2GB) for initial financial metric population — faster than per-company API calls. Load into DuckDB first, then recompute snapshots onto FalkorDB Company nodes
+- **Rate limiting**: edgartools handles SEC rate limiting and User-Agent headers automatically. Set identity via `set_identity("email@example.com")` or `EDGAR_IDENTITY` environment variable
+- **Structured data first**: edgartools provides typed data objects (`filing.obj()`) for 20+ filing types. Always prefer structured extraction (higher confidence) over LLM extraction from markdown text. Use LLM extraction only for relationships and insights that edgartools doesn't extract structurally (e.g., supply chain mentions in risk factors, competitive dynamics)
+- **No Docling for SEC filings**: edgartools provides `filing.markdown()` natively — do not use Docling for SEC filing content. Docling is only needed for non-SEC documents (uploaded PDFs, scraped IR pages)
+- **Local storage (offline-first)**: All SEC data is pre-downloaded via edgartools local storage (`download_edgar_data()` for ~24 GB metadata + `download_filings()` for filing documents). All pipeline operations read from local NVMe — no network requests during ingestion runs. Incremental updates download only new filings weekly. See [05-tech-stack.md](05-tech-stack.md) § edgartools Local Storage for setup and storage planning
 
 ---
 
@@ -384,7 +380,7 @@ This pipeline covers company-level financial data (Tier 0) and macro-economic in
    └── Hash article URL → check if article_id exists in graph
    └── Skip if already processed
 
-3. Preprocess with MarkItDown
+3. Preprocess with Docling
    └── Convert HTML article → clean Markdown
    └── Strip ads, navigation, boilerplate
 
@@ -425,8 +421,8 @@ This pipeline covers company-level financial data (Tier 0) and macro-economic in
 | **Aggregators (optional)** | https://www.prnewswire.com/, https://www.businesswire.com/, https://www.globenewswire.com/ — aggregate press releases across companies |
 | **Pricing** | **Free** — all public |
 | **Auth** | None |
-| **Format** | HTML (scraped), PDF (investor presentations, via MarkItDown) |
-| **Fetch Method** | Scrapy for static IR pages. Discover press release URLs from IR index pages (`/press-releases`, `/news-releases`). Use RSS feeds where available (many IR sites expose RSS). Parse PDFs (investor presentations, fact sheets) with MarkItDown |
+| **Format** | HTML (scraped), PDF (investor presentations, via Docling) |
+| **Fetch Method** | Scrapy for static IR pages. Discover press release URLs from IR index pages (`/press-releases`, `/news-releases`). Use RSS feeds where available (many IR sites expose RSS). Parse PDFs (investor presentations, fact sheets) with Docling |
 | **Key Data** | Press releases (product launches, partnerships, executive changes, guidance updates, dividend announcements), investor presentations (strategic roadmaps, segment financials, forward guidance), earnings call dates, special events |
 | **Graph Nodes** | `NewsArticle` (for press releases), `Filing` (for investor presentations), `Person` (executive changes), `Company` |
 | **Relationships** | `ANNOUNCED` (Company → NewsArticle), `PARTNERS_WITH`, `HAS_EXECUTIVE`, `MENTIONED_IN` |
@@ -519,7 +515,7 @@ Extract from **DEF 14A (Proxy Statement)**:
 
 | Extraction Method | Base Confidence | Rationale |
 |-------------------|-----------------|-----------|
-| Company Facts API field | 0.95–1.0 | Machine-readable, authoritative |
+| edgartools structured data | 0.95–1.0 | Machine-readable, authoritative |
 | SEC table extraction | 0.90–0.95 | Structured but OCR errors possible |
 | 10-K "Principal Suppliers" LLM extraction | 0.80–0.90 | Disclosed requirement, high signal |
 | 10-K "Risk Factors" LLM extraction | 0.70–0.85 | Narrative, some interpretation needed |
@@ -530,7 +526,7 @@ Extract from **DEF 14A (Proxy Statement)**:
 
 ### Targets
 - **Company IR pages + press releases**: Daily scan for new releases. RSS feeds preferred (fast, low bandwidth). Fall back to HTML scraping of press release index pages
-- **Investor presentations**: Quarterly earnings presentations (PDFs), capital markets day decks, fact sheets. MarkItDown converts to Markdown for GraphRAG-SDK extraction
+- **Investor presentations**: Quarterly earnings presentations (PDFs), capital markets day decks, fact sheets. Docling converts to Markdown for GraphRAG-SDK extraction
 - **Supply chain databases**: Public data on supplier/customer relationships (ImportYeti)
 - **Industry reports**: Publicly available market research
 - **Wikipedia/Wikidata**: Board member info, company relationships
@@ -549,8 +545,8 @@ Extract from **DEF 14A (Proxy Statement)**:
    └── Compare against already-processed URL hashes (ingestion.db)
 
 2. Fetch and classify content
-   └── Press release (HTML) → MarkItDown → Markdown
-   └── Investor presentation (PDF) → MarkItDown → Markdown
+   └── Press release (HTML) → Docling → Markdown
+   └── Investor presentation (PDF) → Docling → Markdown
    └── LLM classification: event type (product launch / M&A / exec change / guidance / partnership)
 
 3. Extract via GraphRAG-SDK
@@ -578,7 +574,7 @@ Extract from **DEF 14A (Proxy Statement)**:
 
 ```
 1. User provides file path via CLI
-2. MarkItDown converts to Markdown
+2. Docling converts to Markdown
 3. User optionally specifies: related company ticker, document type
 4. GraphRAG-SDK extracts entities and relationships
 5. Entity resolution + Load into FalkorDB
@@ -600,7 +596,7 @@ Extract from **DEF 14A (Proxy Statement)**:
 | **API** | **Quiver Quant**: https://api.quiverquant.com/ (paid, ~$10-30/mo). **House/Senate**: No API — HTML scraping or PDF parsing |
 | **Pricing** | **Raw data**: Free (public records). **Capitol Trades**: Free website, premium features behind paywall. **Quiver Quant API**: ~$10-30/mo |
 | **Format** | PDF (Financial Disclosure Reports), HTML (search results) |
-| **Fetch Method** | **Recommended**: Scrape raw data from House Clerk and Senate EFD portals. Use MarkItDown for PDF → markdown conversion. Alternatively, use Quiver Quant API for pre-parsed data (easier but adds dependency). Capitol Trades for manual validation |
+| **Fetch Method** | **Recommended**: Scrape raw data from House Clerk and Senate EFD portals. Use Docling for PDF → markdown conversion. Alternatively, use Quiver Quant API for pre-parsed data (easier but adds dependency). Capitol Trades for manual validation |
 | **Key Data** | Legislator name, transaction type (buy/sell/exchange), asset description, transaction date, notification date, amount range, filing URL |
 | **Graph Nodes** | `Legislator`, `CongressionalTrade` |
 | **Relationships** | `DISCLOSED_TRADE` (Legislator → CongressionalTrade), `INVOLVES` (CongressionalTrade → Company), `MEMBER_OF` (Legislator → Committee) |
@@ -631,7 +627,7 @@ Extract from **DEF 14A (Proxy Statement)**:
 ```
 1. Fetch new disclosures
    └── Scrape or API-fetch from Senate EFDS / House clerk / Capitol Trades
-   └── Parse PDF disclosures (MarkItDown for PDF → markdown if needed)
+   └── Parse PDF disclosures (Docling for PDF → markdown if needed)
    └── Extract structured fields: legislator, transaction date, asset, amount range, type
 
 2. Entity resolution
@@ -665,16 +661,16 @@ Extract from **DEF 14A (Proxy Statement)**:
 | Field | Detail |
 |-------|--------|
 | **URL** | https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&type=13F |
-| **API** | Same EDGAR API: `data.sec.gov/submissions/CIK{cik}.json` filtered for form type `13F-HR`. Also: https://efts.sec.gov/LATEST/search-index?q=&forms=13F-HR |
+| **API** | Via **edgartools**: `Company(cik).get_filings(form="13F-HR")` — no raw API calls needed |
 | **Pricing** | **Free** |
-| **Format** | XML (information table), HTML |
-| **Fetch Method** | Download 13F-HR filings. Parse the XML information table for holdings (CUSIP, shares, value). Map CUSIP to ticker using OpenFIGI (below) |
+| **Format** | edgartools parses XML information table automatically → structured Python objects |
+| **Fetch Method** | `filing = Company(cik).get_filings(form="13F-HR")[0]` → `thirteenf = filing.obj()` → `thirteenf.holdings` (DataFrame with CUSIP, shares, value, put/call). Map CUSIP → ticker using OpenFIGI (below) for holdings where edgartools doesn't resolve the ticker |
 | **Key Data** | Institutional holder (fund name, CIK), positions (CUSIP, shares, value, put/call), filing date, quarter |
 | **Graph Nodes** | `InstitutionalHolder`, `Company` |
 | **Relationships** | `HOLDS_POSITION` (InstitutionalHolder → Company via CUSIP) |
 | **Update Frequency** | Quarterly (45 days after quarter end). ~5,000 institutions file |
-| **Python Libraries** | `sec-edgar-downloader`, custom XML parser |
-| **Notes** | Critical for "following smart money." 13F data is 45 days stale but shows positioning trends. Cross-reference with Congressional trades for confirmation patterns. Parse the XML information table, not the HTML cover page |
+| **Python Libraries** | **`edgartools`** (primary). OpenFIGI API for CUSIP → ticker resolution |
+| **Notes** | Critical for "following smart money." 13F data is 45 days stale but shows positioning trends. Cross-reference with Congressional trades for confirmation patterns. edgartools parses the XML information table automatically — no custom XML parsing needed |
 
 #### OpenFIGI — CUSIP / ISIN / Ticker Mapping (Tier 2)
 
@@ -703,14 +699,14 @@ Extract from **DEF 14A (Proxy Statement)**:
 ### Pipeline Steps
 
 ```
-1. Fetch 13F filing index
-   └── GET https://data.sec.gov/submissions/CIK{cik}.json for tracked institutions
-   └── Filter for form type "13F-HR"
-   └── Skip already-processed accession numbers
+1. Fetch 13F filings (via edgartools)
+   └── filings = Company(cik).get_filings(form="13F-HR")
+   └── Skip already-processed accession numbers (check against SQLite state)
 
-2. Parse 13F holdings table (XML/HTML)
-   └── Extract: company name, CUSIP, ticker, shares, value, put/call indicator
-   └── Map CUSIP → ticker using OpenFIGI API (cache results locally)
+2. Parse 13F holdings (via edgartools)
+   └── thirteenf = filing.obj()
+   └── holdings_df = thirteenf.holdings  # DataFrame: company name, CUSIP, shares, value, put/call
+   └── Map CUSIP → ticker using OpenFIGI API (cache results locally in DuckDB)
 
 3. Compute quarter-over-quarter changes
    └── Compare against previous quarter's holdings
@@ -817,14 +813,15 @@ These add depth and breadth to the graph. Build only after Tiers 0-2 are working
 | Field | Detail |
 |-------|--------|
 | **URL** | https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&type=4 |
-| **API** | EDGAR API, filter for forms 3, 4, 5. Also: https://efts.sec.gov/LATEST/search-index?forms=4 |
+| **API** | Via **edgartools**: `Company(ticker).get_filings(form="4")` — no raw API calls needed |
 | **Pricing** | **Free** |
-| **Format** | XML (structured ownership report) |
-| **Fetch Method** | Parse XML ownership reports. Each filing has reporting owner (insider), issuer (company), transaction details (buy/sell, shares, price, date) |
+| **Format** | edgartools parses XML ownership reports automatically → structured Python objects |
+| **Fetch Method** | `filing = Company(ticker).get_filings(form="4")[0]` → `form4 = filing.obj()` → `form4.transactions` (list of insider transactions with shares, price, date, transaction type). Also: `form4.reporting_owner` for insider identity and title |
 | **Key Data** | Insider name, title (CEO, CFO, Director), transaction type, shares, price, ownership after transaction |
 | **Graph Nodes** | `Person`, `Company` |
 | **Relationships** | `HAS_EXECUTIVE` (enrichment), insider trade as edge property or separate node |
-| **Notes** | Insider buying is a stronger signal than insider selling (insiders sell for many reasons, but they buy for one reason). Cross-reference with 13F and Congressional data for multi-signal confirmation. The XML is well-structured — no LLM extraction needed |
+| **Python Libraries** | **`edgartools`** (primary and sole library) |
+| **Notes** | Insider buying is a stronger signal than insider selling (insiders sell for many reasons, but they buy for one reason). Cross-reference with 13F and Congressional data for multi-signal confirmation. edgartools parses the XML ownership reports automatically — no custom XML parsing needed |
 
 ---
 
@@ -834,12 +831,13 @@ These add depth and breadth to the graph. Build only after Tiers 0-2 are working
 |-------|--------|
 | **URL** | EDGAR, filter for forms SC 13D, SC 13G |
 | **Pricing** | **Free** |
-| **Format** | HTML/text (less structured than Form 4) |
-| **Fetch Method** | Download filings, parse for ownership percentage, filer identity, stated purpose |
+| **Format** | edgartools provides structured access via `filing.obj()` for Schedule 13D/G filings |
+| **Fetch Method** | `Company(ticker).get_filings(form="SC 13D")` or `form="SC 13G"` → `filing.obj()` for structured data (ownership percentage, filer identity). `filing.markdown()` for full text when LLM analysis of stated purpose is needed |
 | **Key Data** | Holder name, ownership percentage (>5%), stated purpose (passive vs. activist), company |
 | **Graph Nodes** | `InstitutionalHolder` or `Person`, `Company` |
 | **Relationships** | `OWNS_STAKE_IN` (with purpose property) |
-| **Notes** | Activist positions (13D) are significant events — someone is buying 5%+ and plans to influence company direction. 13G is passive but still shows large concentrated positions |
+| **Python Libraries** | **`edgartools`** (primary and sole library) |
+| **Notes** | Activist positions (13D) are significant events — someone is buying 5%+ and plans to influence company direction. 13G is passive but still shows large concentrated positions. edgartools provides structured access; use `filing.markdown()` + LLM only for analyzing stated purpose text |
 
 ---
 
@@ -849,12 +847,13 @@ These add depth and breadth to the graph. Build only after Tiers 0-2 are working
 |-------|--------|
 | **URL** | EDGAR, filter for form DEF 14A |
 | **Pricing** | **Free** |
-| **Format** | HTML |
-| **Fetch Method** | Download and parse proxy statements. LLM extraction for executive names, compensation, board members, shareholder proposals |
+| **Format** | edgartools provides structured proxy data via `filing.obj()` (executive compensation, board info) |
+| **Fetch Method** | `Company(ticker).get_filings(form="DEF 14A")[0]` → `proxy = filing.obj()` → `proxy.executive_compensation` (compensation table), `proxy.peo_total_comp` (CEO pay), board members. `filing.markdown()` for full text when LLM extraction of shareholder proposals or governance details is needed |
 | **Key Data** | Named executive officers, compensation breakdown, board of directors, shareholder proposals, voting results |
 | **Graph Nodes** | `Person` (executives, directors), `Company` |
 | **Relationships** | `HAS_EXECUTIVE`, `HAS_BOARD_MEMBER` |
-| **Notes** | Useful for mapping the executive/board network. Directors who sit on multiple boards create relationship edges between companies. Executive compensation outliers can signal governance issues |
+| **Python Libraries** | **`edgartools`** (primary and sole library) |
+| **Notes** | Useful for mapping the executive/board network. Directors who sit on multiple boards create relationship edges between companies. Executive compensation outliers can signal governance issues. edgartools provides structured compensation data — use LLM extraction only for shareholder proposals and governance details not covered by edgartools |
 
 ---
 
@@ -1212,7 +1211,7 @@ If the platform evolves to consume **push-based / webhook feeds** (e.g., EDGAR's
 |------------|----------------------|------------------------|
 | **Company** | EDGAR (T0), FMP (T0) | ImportYeti (T1), Company websites |
 | **Filing** | EDGAR (T0) | Investor presentations / IR PDFs (T1) |
-| **DuckDB (financial_metrics)** | EDGAR Company Facts API (T0), FMP (T0) — full time series + provenance via `accession` column | BLS (T2), Short interest (T3), Dark pool volume (T3), Google Trends (T4) |
+| **DuckDB (financial_metrics)** | edgartools (T0), FMP (T0) — full time series + provenance via `accession` column | BLS (T2), Short interest (T3), Dark pool volume (T3), Google Trends (T4) |
 | **NewsArticle** | Marketaux (T0), GNews (T0) | IR press releases (T1), NewsAPI (T0), CNBC picks (T4) |
 | **Industry / Sector** | EDGAR SIC (T1), FMP GICS (T0) | — |
 | **Person** | EDGAR proxy (T0), Form 4 (T3) | LinkedIn (manual) |
@@ -1231,7 +1230,7 @@ If the platform evolves to consume **push-based / webhook feeds** (e.g., EDGAR's
 
 | Category | Sources | Annual Cost |
 |----------|---------|-------------|
-| **Completely Free** | EDGAR, EDGAR Company Facts API, FRED, Congress.gov, USASpending, BLS, BEA, World Bank, IMF, OpenFIGI, Federal Register, PatentsView, LDA (lobbying) | **$0** |
+| **Completely Free** | EDGAR (via edgartools), FRED, Congress.gov, USASpending, BLS, BEA, World Bank, IMF, OpenFIGI, Federal Register, PatentsView, LDA (lobbying) | **$0** |
 | **Freemium (free tier sufficient for Phase 0-1)** | FMP, Marketaux, GNews, CoinGecko, BLS registered | **$0** for Phase 0-1 |
 | **Recommended paid (production)** | FMP Starter ($14/mo), Marketaux Standard ($29/mo) | **~$516/yr** |
 | **Optional paid** | Quiver Quant ($10-30/mo), Unusual Whales ($57/mo) | **~$500-1,000/yr** |
@@ -1264,12 +1263,12 @@ If the platform evolves to consume **push-based / webhook feeds** (e.g., EDGAR's
 
 ### Phase 0 (Data Foundation — 50 companies, 2-3 weeks)
 1. **EDGAR** — 10-K, 10-Q for 50 semiconductor companies (fetch, parse, LLM-extract entities/relationships)
-2. **EDGAR Company Facts API** — Financial metrics for those 50 companies → written to DuckDB `financial_metrics` table (via `timeseries.py`); latest snapshot recomputed onto FalkorDB Company nodes
+2. **edgartools financial data** — `company.get_financials()` + `company.get_facts()` for those 50 companies → written to DuckDB `financial_metrics` table (via `timeseries.py`); latest snapshot recomputed onto FalkorDB Company nodes
 3. **DuckDB initialization** — `financial_timeseries.duckdb` created with full schema (`financial_metrics` + `macro_timeseries`) during Phase 0 infrastructure setup. Phase 2 pipelines (FMP, FRED) write to this same store without schema changes
 4. **FMP (free tier)** — Company profiles, prices, sector/industry (optional, lower priority than SEC extraction)
 
 ### Phase 1-2 (Core graph — 500 companies)
-5. **EDGAR Company Facts API bulk download** — All company financials
+5. **edgartools bulk financial data** — Scale to all company financials via edgartools local storage (`download_edgar_data()` + `download_filings()`), then per-company incremental updates
 6. **EDGAR 13F** — Top 50 institutional holders
 7. **OpenFIGI** — CUSIP mapping for 13F parsing
 8. **SIC/NAICS** — Industry classification from EDGAR

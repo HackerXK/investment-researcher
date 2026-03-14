@@ -15,7 +15,7 @@ The graph is intentionally broad — it captures not only company-level data but
 > - **Offline operation**: full pipeline can run without network access once files are fetched
 > - **Agent escalation**: agents read node summaries first (fast, cheap); when they need more detail on a specific claim — e.g. "what exactly did the 10-K say about Taiwan exposure?" — they load `file_path` to search the original text directly. Summaries will always lose some nuance; `file_path` is the escape hatch.
 >
-> Path convention: `data/raw/{source_type}/{identifier}/{filename}` — e.g. `data/raw/filings/0000320193/0000320193-25-000123.html`### Confidence & Data Quality Principles
+> Path convention: SEC filings → `data/edgar/filings/` (managed by edgartools local storage); other sources → `data/raw/{source_type}/{identifier}/{filename}`### Confidence & Data Quality Principles
 
 > See [00-strategic-rationale.md](00-strategic-rationale.md) for the full strategic analysis behind these principles.
 
@@ -26,7 +26,7 @@ The graph is intentionally broad — it captures not only company-level data but
    - Agent system applies a 0.9 per-hop discount factor when reasoning across hops.
    - Findings beyond 3 hops require corroboration from a second data source.
 
-3. **Prefer structured over extracted**: For critical relationships (supply chain, financial ties), prefer data from structured sources (SEC Company Facts API, Capitol Trades API) over LLM-extracted relationships. LLM-extracted relationships should carry lower confidence scores.
+3. **Prefer structured over extracted**: For critical relationships (supply chain, financial ties), prefer data from structured sources (edgartools financial data, Capitol Trades API) over LLM-extracted relationships. LLM-extracted relationships should carry lower confidence scores.
 
 4. **Confidence scoring on all edges**: Every relationship carries a `confidence` property (0.0–1.0). Agent reasoning discounts low-confidence edges and flags them in reports.
 
@@ -92,8 +92,8 @@ SEC filings (10-K, 10-Q, 8-K, proxy statements, etc.)
   filed_date: STRING,        -- "2025-10-30"
   period_of_report: STRING,  -- "2025-09-30"
   filing_url: STRING,        -- EDGAR URL (canonical source)
-  file_path: STRING,         -- Local path to raw filing file, e.g.
-                             --   "data/raw/filings/0000320193/0000320193-25-000123.html"
+  file_path: STRING,         -- Local path to raw filing file; for SEC filings this
+                             --   points into edgartools local storage under data/edgar/filings/
 
   -- LLM-generated / extracted fields (populated during entity extraction step)
   summary: STRING,           -- LLM-generated summary of the filing
@@ -435,7 +435,7 @@ This is what separates institutional-grade research from surface-level analysis.
 | Property | Phase 0 (Manual) | Phase 2+ (Automated) | Data Source |
 |----------|------------------|----------------------|-------------|
 | `confidence` | ✓ Manual estimate | LLM multi-source scoring | Filing text + news corroboration |
-| `source` | ✓ "10-K 2024" | Full citation with page | Company Facts API metadata + document parser |
+| `source` | ✓ "10-K 2024" | Full citation with page | edgartools metadata + document parser |
 | `description` | ✓ Hand-written for seed edges | LLM-generated at ingestion time | Source paragraph(s) the relationship was extracted from — passed as context to the LLM |
 | `product_category` | ✓ Hand-coded | LLM extraction | "Principal Suppliers" section |
 | `dependency_level` | ✓ Domain knowledge | LLM + keyword detection | "Risk Factors" mentions of "sole source", "critical" |
@@ -766,7 +766,7 @@ ORDER BY date DESC LIMIT 60;
 
 ```
            ┌──────────────┐
-           │ Data Sources  │  (EDGAR Company Facts API, FMP, Polygon, FRED, BLS, ...)
+           │ Data Sources  │  (edgartools, FMP, Polygon, FRED, BLS, ...)
            └──────┬───────┘
                   │
                   ▼

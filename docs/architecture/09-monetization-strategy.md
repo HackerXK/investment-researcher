@@ -164,7 +164,7 @@ Open-source the data ingestion pipelines as standalone tools. These solve real p
 
 | Component | Why It's Valuable Standalone | GitHub Repo Name (proposed) |
 |-----------|-----------------------------|-----------------------------|
-| SEC EDGAR Parser | Downloads, parses, and structures 10-K/10-Q/8-K filings with Company Facts API integration | `edgar-pipeline` |
+| SEC EDGAR Parser | Downloads, parses, and structures 10-K/10-Q/8-K filings via edgartools | `edgar-pipeline` |
 | Congressional Trade Tracker | Scrapes House/Senate STOCK Act disclosures, entity-resolves to tickers | `congress-trades` |
 | 13F Parser | Fetches 13F-HR filings, parses XML, maps CUSIPs to tickers via OpenFIGI | `thirteenf` |
 | Entity Resolution Library | Fuzzy name matching + CIK/CUSIP/bioguide ID resolution for financial entities | `finentity` |
@@ -246,7 +246,7 @@ Backtesting is educational/research — not investment advice. Standard disclaim
 #### B3. Financial Data Engineering Consulting
 
 The skills built developing this platform are rare and highly paid:
-- SEC EDGAR parsing and Company Facts API integration
+- SEC EDGAR parsing via edgartools
 - Knowledge graph design for financial data
 - Multi-agent LLM architectures
 - Distributed inference on Apple Silicon

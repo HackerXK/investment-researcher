@@ -25,15 +25,17 @@ A **one-person institutional research desk** that maintains a living knowledge g
 │                       DATA INGESTION LAYER                              │
 │                                                                         │
 │  ┌──────────┐  ┌───────────────┐  ┌────────────────┐  ┌─────────────┐  │
-│  │MarkItDown│  │ Structured API│  │ Entity Resolver│  │ Scheduler   │  │
-│  │(doc→md)  │  │(CompanyFacts) │  │ (dedup/merge)  │  │ (APScheduler│  │
+│  │edgartools │  │ Structured API│  │ Entity Resolver│  │ Scheduler   │  │
+│  │(SEC data) │  │(non-SEC APIs) │  │ (dedup/merge)  │  │ (APScheduler│  │
 │  └────┬─────┘  └───────┬───────┘  └───────┬────────┘  │  + cron)    │  │
 │       │                │                   │           └─────────────┘  │
 │       ▼                ▼                   ▼                            │
-│  ┌─────────────────────────────────────────────────────┐                │
-│  │              GraphRAG-SDK                           │                │
-│  │  Ontology Detection → Entity Extraction → KG Load   │                │
-│  └──────────────────────┬──────────────────────────────┘                │
+│  ┌──────────────┐  ┌──────────────────────────────────────┐             │
+│  │Docling       │  │              GraphRAG-SDK             │             │
+│  │(non-SEC docs)│  │  Ontology Detection → Entity Extract  │             │
+│  └──────┬───────┘  │  → KG Load                           │             │
+│         └──────────┤                                      │             │
+│                    └──────────────────┬───────────────────┘             │
 └─────────────────────────┼───────────────────────────────────────────────┘
                           │
                           ▼
@@ -121,7 +123,8 @@ A **one-person institutional research desk** that maintains a living knowledge g
 |----------|--------|-----------|
 | **Graph database** | FalkorDB | Property graph with Cypher, vector indexing, high performance, Redis protocol. In-memory for fast traversals |
 | **Orchestration layer** | OpenAI Agents SDK (outer) wrapping GraphRAG-SDK (inner tool) | OpenAI SDK gives fine-grained control over multi-agent handoffs, guardrails, tracing. GraphRAG-SDK's `chat_session()` exposed as a tool for NL→Cypher queries |
-| **Document preprocessing** | MarkItDown → GraphRAG-SDK | MarkItDown handles formats GraphRAG-SDK doesn't natively support (PPTX, XLSX, audio). Unified markdown output for LLM consumption |
+| **SEC data access** | edgartools (primary and sole SEC library) | Free, MIT licensed. Provides structured Python objects for all SEC filing types, financial statements (XBRL), filing content (`.markdown()`, `.html()`), 13F holdings, insider trades, proxy statements. Replaces raw EDGAR API calls, `sec-edgar-downloader`, `sec-api`, and manual XML/HTML parsing. See [05-tech-stack.md](05-tech-stack.md) § edgartools Deep Dive |
+| **Document preprocessing** | Docling → GraphRAG-SDK | Docling handles **non-SEC** formats only (uploaded PDFs, PPTX, XLSX, scraped web pages). NOT needed for SEC filings — edgartools provides `filing.markdown()` natively. AI-powered table extraction and layout analysis for financial documents. Unified markdown output for LLM consumption |
 | **Observability** | Langfuse (self-hosted) | Open-source, captures full traces, cost tracking. Integrated with OpenAI Agents SDK via OpenInference bridge |
 | **Report storage** | SQLite | Lightweight, no extra infrastructure, sufficient for local deployment. Agent writes structured JSON findings |
 | **LLM strategy** | OpenAI API initially → Local LLM later | GPT-4.1 for KG construction quality. Migrate to Mac Studio cluster (2–4 × 512 GB) running exo/MLX with LiteLLM abstraction layer |
@@ -132,13 +135,18 @@ A **one-person institutional research desk** that maintains a living knowledge g
 
 ### Ingestion Flow (Continuous)
 ```
-Source → Fetch/Scrape → MarkItDown (if needed) → GraphRAG-SDK entity extraction
+Source → Fetch data → Preprocess → GraphRAG-SDK entity extraction
   → Entity Resolution (dedup) → FalkorDB (Cypher MERGE)
 
-Sources include: SEC filings, financial APIs, news, web scraping,
-Congressional disclosures, 13F institutional holdings, government
-contract data, legislation/policy feeds, country economic data, and
-manual uploads.
+SEC sources: edgartools (Company, Filings, Financials, Facts, 13F, etc.)
+  → filing.markdown() for LLM-ready text
+  → filing.obj() for structured data (10-K, DEF 14A, 8-K, Form 4, 13F)
+  → company.get_financials() / company.get_facts() for structured financial data
+
+Non-SEC sources: Financial APIs, news, web scraping, manual uploads,
+  Congressional disclosures, government contracts, legislation/policy,
+  country economic data
+  → Docling (PDF/PPTX/XLSX → markdown, only for non-SEC documents)
 ```
 
 ### Autonomous Agent Flow (24/7)

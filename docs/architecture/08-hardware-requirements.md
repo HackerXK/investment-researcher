@@ -104,7 +104,7 @@ All platform services run as Docker containers on this machine:
 | **FalkorDB** | 2–4 | 16–32 GB | Local NVMe (`/data`) | In-memory graph. **This is why 64 GB system RAM matters** — FalkorDB gets 16–32 GB, leaving 32–48 GB for everything else |
 | **Langfuse** | 1–2 | 2–4 GB | — | Observability UI |
 | **Langfuse Postgres** | 1–2 | 2–4 GB | Local NVMe | Trace storage |
-| **Ingestion Worker** | 2–4 | 2–4 GB | Local NVMe (`./data/raw/`) | Reads raw data from local NVMe, writes to FalkorDB |
+| **Ingestion Worker** | 2–4 | 2–4 GB | Local NVMe (`./data/edgar/`, `./data/raw/`) | Reads from edgartools local storage and raw files, writes to FalkorDB |
 | **Agent Runner** | 2–4 | 2–4 GB | — | Calls local LLM API on same machine |
 | **LLM Server** | 2–4 (+ GPU) | 2–4 GB + 32 GB VRAM | Local NVMe (model files) | vLLM or llama.cpp with CUDA backend |
 | **Total** | 10–20 of 32 threads | ~40–56 GB | | Leaves headroom for OS and burst workloads |
@@ -126,7 +126,12 @@ investment-researcher/
 #
 # Volume 2: WD Blue SN5000 2×2TB RAID 0 = 4TB stripe — sequential/bulk access
 ├── data/
-│   ├── raw/                     # SEC filings, PDFs, CSVs, news articles
+│   ├── edgar/                   # edgartools local storage (~24 GB metadata + 50–150 GB/year filings)
+│   │   ├── reference/           #   ~50 MB — SIC codes, exchanges, tickers
+│   │   ├── companyfacts/        #   ~2 GB — XBRL financial facts
+│   │   ├── submissions/         #   ~5 GB — company metadata & filing indexes
+│   │   └── filings/             #   ~50–150 GB/year — actual filing documents
+│   ├── raw/                     # Non-SEC raw data: PDFs, CSVs, news articles
 │   └── uploads/                 # User-uploaded documents
 ├── cache/                       # Temporary processing cache
 └── models/

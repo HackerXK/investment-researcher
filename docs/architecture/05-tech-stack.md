@@ -7,8 +7,9 @@
 | Layer | Technology | Version | Purpose |
 |-------|-----------|---------|---------|
 | Graph Database | FalkorDB | latest | Property graph storage, Cypher queries, vector indexing |
+| SEC Data Access | edgartools | 5.x+ | **Primary SEC EDGAR interface.** Structured Python objects for all SEC filing types (10-K, 10-Q, 8-K, DEF 14A, 13F, Form 4, 13D/G, etc.), financial statements (XBRL), full-text search, filing content extraction (HTML, markdown). Replaces raw EDGAR API calls, `sec-edgar-downloader`, and manual XML parsing. Free, MIT licensed, no API keys |
 | Knowledge Graph SDK | GraphRAG-SDK | 0.8.1+ | Ontology management, document→KG extraction, NL→Cypher |
-| Document Processing | MarkItDown | 0.1.4+ | Convert PDF/DOCX/PPTX/XLSX/HTML → Markdown |
+| Document Processing | Docling | 2.x+ | AI-powered document conversion (PDF/DOCX/PPTX/XLSX/HTML/images → Markdown/JSON). Advanced table extraction, layout analysis, OCR. **Not needed for SEC filings** — edgartools provides `.markdown()` natively. MIT licensed, IBM/LF AI & Data |
 | Agent Orchestration | OpenAI Agents SDK | 0.9+ | Multi-agent system, handoffs, guardrails, tools |
 | Observability | Langfuse | latest | LLM tracing, cost tracking, prompt management |
 | LLM Provider (Initial) | OpenAI API | — | GPT-4.1, GPT-4.1-mini, text-embedding-3-small |
@@ -144,40 +145,218 @@ response = chat.send_message("Which companies supply Apple?")
 
 ---
 
-## MarkItDown — Deep Dive
+## edgartools — Deep Dive
 
 ### What It Does
-Microsoft's lightweight converter for turning documents into Markdown optimized for LLM consumption.
+edgartools is a Python library for accessing SEC EDGAR filings as structured data. It parses financial statements, insider trades, fund holdings, proxy statements, and 20+ other filing types into typed Python objects with properties, methods, and DataFrames. Free, MIT licensed, no API keys required.
 
 ### How We Use It
-- **Preprocessing step** before GraphRAG-SDK ingestion
-- Converts SEC filings (HTML) → clean Markdown
-- Converts uploaded documents (PDF, DOCX, PPTX, XLSX) → Markdown
-- Converts scraped web pages → clean Markdown (strips boilerplate)
+- **Primary and sole interface to SEC EDGAR** — all SEC data flows through edgartools
+- **Offline-first via local storage** — all SEC metadata and filings are downloaded locally for maximum performance (10-100x faster) and offline capability. See [Local Storage](#edgartools-local-storage) below
+- **Company lookup**: by ticker or CIK, with metadata (industry, SIC, shares outstanding, public float)
+- **Filing access**: fetch, filter, and parse all filing types (10-K, 10-Q, 8-K, DEF 14A, 13F-HR, Form 4, 13D/G, S-1, N-PORT, etc.)
+- **Financial statements**: `company.get_financials()` → parsed income statement, balance sheet, cash flow as DataFrames
+- **Historical XBRL data**: `company.get_facts()` → all historical XBRL facts as structured data (for granular concept-level queries)
+- **Filing content extraction**: `.markdown()` for LLM-ready text, `.html()`, `.xbrl()`, `.sections()`, `.search()`
+- **13F institutional holdings**: `filing.obj()` → `.holdings` DataFrame with complete portfolio positions
+- **Insider trades (Form 4)**: `filing.obj()` → `.transactions` with buy/sell details
+- **Proxy statements (DEF 14A)**: `filing.obj()` → executive compensation, pay vs performance, TSR
+- **8-K events**: `filing.obj()` → `.items` with structured event data
+- **10-K data objects**: `.auditor`, `.subsidiaries` as structured objects
+- **Schedule 13D/G**: beneficial ownership data
+- **Full-text search**: via EFTS (`find("supply chain disruption", form="10-K")`)
 
 ### Integration Pattern
 ```python
-from markitdown import MarkItDown
+from edgar import *
 
-md = MarkItDown()
+# Set identity (required by SEC)
+set_identity("your.name@example.com")
 
-# Convert filing HTML
-result = md.convert("filings/aapl_10k_2025.html")
-markdown_text = result.text_content
+# Enable local storage for offline-first operation (see Local Storage section below)
+use_local_storage("./data/edgar")
 
-# Feed to GraphRAG-SDK
+# Company lookup
+company = Company("AAPL")
+
+# Get financial statements (parsed from XBRL)
+financials = company.get_financials()
+income = financials.income_statement()   # DataFrame
+balance = financials.balance_sheet()     # DataFrame
+cashflow = financials.cashflow_statement()  # DataFrame
+
+# Get all historical XBRL facts (granular concept-level data)
+facts = company.get_facts()
+revenue_df = facts.to_pandas("us-gaap:Revenues")  # Revenue history as DataFrame
+
+# Get filings
+filings = company.get_filings(form="10-K")
+tenkfiling = filings.latest()
+
+# Extract filing content as markdown (for LLM/GraphRAG-SDK ingestion)
+markdown_text = tenkfiling.markdown()
+
+# Parse 10-K into structured data object
+tenk = tenkfiling.obj()
+subsidiaries = tenk.subsidiaries  # Structured subsidiaries list
+auditor = tenk.auditor            # Auditor info
+
+# 13F institutional holdings
+thirteenf_filing = get_filings(form="13F-HR")[0]
+holdings = thirteenf_filing.obj().holdings  # DataFrame of all positions
+
+# Insider trades (Form 4)
+form4 = company.get_filings(form="4")[0].obj()
+transactions = form4.transactions  # Insider buy/sell transactions
+
+# Proxy statement (DEF 14A) — executive compensation
+proxy = company.get_filings(form="DEF 14A").latest().obj()
+ceo_comp = proxy.peo_total_comp
+exec_comp_df = proxy.executive_compensation  # 5-year exec compensation DataFrame
+
+# 8-K events
+eightk = company.get_filings(form="8-K")[0].obj()
+items = eightk.items  # List of reported event items
+
+# Full-text search across all filings
+results = find("supply chain disruption", form="10-K")
+
+# Feed markdown to GraphRAG-SDK for entity extraction
 from graphrag_sdk.source import Source
 source = Source(content=markdown_text, metadata={"type": "10-K", "ticker": "AAPL"})
 kg.process_sources([source])
 ```
 
-### When MarkItDown Is Needed vs. Not
+### What edgartools Replaces
 
-| Format | MarkItDown Needed? | Why |
-|--------|-------------------|-----|
-| PDF | Optional | GraphRAG-SDK handles PDF natively, but MarkItDown may offer better extraction |
-| HTML | Yes | Clean up web boilerplate before entity extraction |
+| Previously | Now |
+|-----------|-----|
+| Direct `data.sec.gov/submissions/CIK{cik}.json` API calls | `Company(ticker_or_cik)` |
+| Direct `data.sec.gov/api/xbrl/companyfacts/` API calls | `company.get_facts()` |
+| `sec-edgar-downloader` for filing downloads | `company.get_filings()` |
+| Manual HTML/XML parsing of filings | `filing.obj()` → typed Python objects |
+| Docling / any converter for SEC filing HTML → Markdown | `filing.markdown()` |
+| Custom 13F XML parser | `filing.obj().holdings` DataFrame |
+| Custom Form 4 XML parser | `filing.obj().transactions` |
+| Custom DEF 14A HTML parser | `filing.obj()` → proxy data object |
+| Custom 8-K parser | `filing.obj().items` |
+| Raw EFTS search API calls | `find(query, form=...)` |
+
+### edgartools Local Storage
+
+edgartools supports downloading all SEC data locally for **offline operation and maximum performance** (10-100x faster than remote requests). We use the **Offline Research Environment** pattern — all SEC metadata, financial facts, and filing documents are stored on the local NVMe.
+
+#### Setup
+```python
+from edgar import use_local_storage, download_edgar_data, download_filings
+
+# Enable local storage (pointed at project data directory)
+use_local_storage("./data/edgar")
+
+# Step 1: Download metadata (~24 GB) — company info, filing indexes, financial facts
+download_edgar_data()  # submissions + facts + reference data
+
+# Step 2: Download actual filing documents for offline XBRL parsing and content access
+download_filings("2021-01-01:")  # 5 years of filings
+```
+
+#### What Gets Downloaded
+
+| Function | What | Size | Enables |
+|----------|------|------|--------|
+| `download_edgar_data(reference=True)` | Ticker/CIK mappings, exchanges | ~50 MB | `Company("AAPL")` lookups |
+| `download_edgar_data(facts=True)` | Pre-processed XBRL financial facts | ~2 GB | `company.get_facts()`, `company.get_financials()` |
+| `download_edgar_data(submissions=True)` | Company metadata + filing indexes | ~5 GB | `company.get_filings()` browsing |
+| `download_edgar_data()` | All of the above | ~24 GB | Full metadata offline |
+| `download_filings("2021-01-01:")` | Actual filing documents (HTML, XBRL, attachments) | ~50-150 GB/year | `filing.markdown()`, `filing.xbrl()`, `filing.obj()` |
+
+#### Directory Structure (under `./data/edgar/`)
+```
+data/edgar/
+├── reference/              # Ticker and exchange data
+├── companyfacts/           # Company financial facts (XBRL)
+├── submissions/            # Company metadata + filing indexes
+└── filings/                # Filing documents by date
+    ├── 20250115/
+    │   ├── filing1.nc
+    │   └── filing2.nc.gz   # Compressed filings
+    └── ...
+```
+
+#### Incremental Updates
+```python
+# Weekly: download only the last 7 days of new filings
+from datetime import datetime, timedelta
+recent = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+download_filings(f"{recent}:")
+```
+
+#### Configuration
+- **Environment variable**: `EDGAR_LOCAL_DATA_DIR=./data/edgar`
+- **Programmatic**: `use_local_storage("./data/edgar")`
+- **Compression**: `download_filings("2025-01-15", compression_level=9)` for maximum space savings
+- When local storage is enabled, edgartools checks local storage first before making SEC requests
+
+### When to Use edgartools vs. Other Tools
+
+| Data Source | Tool | Why |
+|------------|------|-----|
+| Any SEC EDGAR data | **edgartools** (always) | Structured Python objects, no raw parsing needed |
+| Non-SEC documents (uploaded PDFs, DOCX, PPTX) | Docling | edgartools is SEC-only. Docling provides AI-powered table extraction and layout analysis |
+| Scraped web pages (IR pages, news) | Docling | HTML cleanup for non-SEC content |
+| Non-SEC structured data (FMP, FRED, APIs) | httpx / custom parsers | Not SEC data |
+
+---
+
+## Docling — Deep Dive
+
+### What It Does
+IBM's AI-powered document understanding and conversion library (LF AI & Data Foundation project, MIT licensed). Uses deep learning models for page layout analysis, table structure recognition, OCR, and formula detection. Produces high-fidelity Markdown, JSON, and its own `DoclingDocument` structured format.
+
+### Why Docling over MarkItDown
+- **AI-powered table extraction** — critical for financial documents (compensation tables, balance sheets, earnings summaries). Uses trained models to detect table structure vs. MarkItDown's heuristic approach
+- **Advanced PDF layout analysis** — handles multi-column layouts, figures, reading order detection in investor presentations and research reports
+- **Built-in OCR** — processes scanned financial documents without extra dependencies
+- **XBRL parsing** — native support for eXtensible Business Reporting Language financial reports
+- **Visual Language Model support** — optional GraniteDocling VLM for complex document understanding
+- **MCP server** — built-in Model Context Protocol server for agentic applications
+- **Native RAG integrations** — LangChain, LlamaIndex, Crew AI, Haystack
+
+### How We Use It
+- **NOT used for SEC filings** — edgartools provides `.markdown()` natively for all filing types
+- Converts **non-SEC** uploaded documents (PDF, DOCX, PPTX, XLSX, images) → Markdown
+- Converts scraped web pages (company IR pages, news articles) → clean Markdown (strips boilerplate)
+- Converts investor presentation PDFs from company websites → Markdown with accurate table preservation
+
+### Integration Pattern
+```python
+from docling.document_converter import DocumentConverter
+
+converter = DocumentConverter()
+
+# Convert non-SEC document (e.g., uploaded investor presentation PDF)
+result = converter.convert("uploads/company_presentation.pdf")
+markdown_text = result.document.export_to_markdown()
+
+# Convert scraped IR page HTML
+result = converter.convert("data/raw/ir_pages/aapl_press_release.html")
+markdown_text = result.document.export_to_markdown()
+
+# Feed to GraphRAG-SDK
+from graphrag_sdk.source import Source
+source = Source(content=markdown_text, metadata={"type": "press_release", "ticker": "AAPL"})
+kg.process_sources([source])
+```
+
+### When Docling Is Needed vs. Not
+
+| Format | Docling Needed? | Why |
+|--------|----------------|-----|
+| SEC filings (10-K, 10-Q, 8-K, etc.) | **No** | edgartools provides `.markdown()` natively |
+| Non-SEC PDF (investor presentations, reports) | Yes | AI-powered table extraction and layout analysis |
+| Non-SEC HTML (IR pages, news articles) | Yes | Clean up web boilerplate before entity extraction |
 | DOCX/PPTX/XLSX | Yes | GraphRAG-SDK doesn't handle these natively |
+| Scanned documents / images | Yes | Built-in OCR support |
 | JSON/CSV | No | Custom parsers for structured data |
 | Plain text | No | Pass directly to GraphRAG-SDK |
 
@@ -324,7 +503,7 @@ dependencies = [
     # Core
     "falkordb>=1.0.0",
     "graphrag-sdk>=0.8.1",
-    "markitdown[all]>=0.1.4",
+    "docling>=2.0.0",
     "openai-agents>=0.9.0",
     
     # Observability
@@ -340,13 +519,13 @@ dependencies = [
     "aiohttp>=3.9.0",
     
     # Document processing
-    # python-xbrl removed — using SEC Company Facts API (JSON) instead of parsing XBRL directly
+    # python-xbrl removed — using edgartools (get_financials(), get_facts()) instead of parsing XBRL directly
     
     # Data source APIs
+    "edgartools>=5.0.0",      # SEC EDGAR data (primary and sole SEC library)
     "congress-api>=0.1.0",    # Congress.gov API wrapper
     "fredapi>=0.5.0",         # FRED economic data
     "wbgapi>=1.0.0",          # World Bank data API
-    "sec-edgar-downloader>=5.0.0",  # SEC EDGAR filing downloads
     
     # Scheduling
     "apscheduler>=3.10.0",

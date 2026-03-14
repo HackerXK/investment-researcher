@@ -33,10 +33,11 @@ All Docker containers, databases, and raw data live on the AMD workstation. The 
 │    vLLM → RTX 5090 (Qwen 32B / Llama 8B)                    │
 │                                                               │
 │  Local storage (6TB NVMe — 2 volumes: 2TB P41 + 4TB SN5000 RAID 0):        │
-│    /data/raw/      ← filings, PDFs, CSVs, news               │
-│    /data/duckdb/   ← financial time series                    │
-│    /data/sqlite/   ← report queue + ingestion state          │
-│    /models/        ← LLM weights (~20GB)                     │
+│    /data/edgar/    ← edgartools local storage (SEC metadata + filings)  │
+│    /data/raw/      ← non-SEC raw files (PDFs, CSVs, news)               │
+│    /data/duckdb/   ← financial time series                              │
+│    /data/sqlite/   ← report queue + ingestion state                     │
+│    /models/        ← LLM weights (~20GB)                                │
 └──────────────────────────────────────────────────────────────┘
                 │
                 │ SSH + VS Code Remote SSH
@@ -141,8 +142,9 @@ LANGFUSE_SECRET_KEY=sk-...          # Get from Langfuse UI after first setup
 LANGFUSE_NEXTAUTH_SECRET=generate-a-random-secret
 LANGFUSE_SALT=generate-a-random-salt
 
+# ─── SEC EDGAR (via edgartools) ────────────────────────
+EDGAR_IDENTITY=your@email.com                   # Required by edgartools for SEC rate limiting. Alternatively: set_identity("your@email.com") in codeEDGAR_LOCAL_DATA_DIR=./data/edgar                # edgartools local storage directory for offline operation. All SEC metadata, facts, and filings stored here
 # ─── Data Source API Keys ──────────────────────────────
-SEC_EDGAR_USER_AGENT=YourName your@email.com   # Required by SEC
 ALPHA_VANTAGE_API_KEY=...                       # Financial data
 NEWSAPI_KEY=...                                 # News
 POLYGON_API_KEY=...                             # Alternative financial data
@@ -196,7 +198,7 @@ investment-researcher/
 │       │   ├── scheduler.py      # APScheduler setup
 │       │   ├── state.py          # Ingestion state tracking (SQLite)
 │       │   ├── resolver.py       # Entity resolution logic
-│       │   ├── preprocessor.py   # MarkItDown wrapper
+│       │   ├── preprocessor.py   # Docling wrapper
 │       │   ├── timeseries.py     # DuckDB time series writer + snapshot recompute
 │       │   ├── pipelines/
 │       │   │   ├── __init__.py
@@ -211,7 +213,7 @@ investment-researcher/
 │       │   │   └── policy.py         # Government & policy pipeline
 │       │   └── loaders/
 │       │       ├── __init__.py
-│       │       ├── company_facts.py  # SEC Company Facts API fetcher
+│       │       ├── financials.py # Structured financial data fetcher (via edgartools)
 │       │       └── structured.py # Structured data → Cypher loader
 │       │
 │       ├── agents/
@@ -260,6 +262,11 @@ investment-researcher/
 ├── cli.py                        # Typer CLI entry point
 │
 ├── data/                         # Local data (gitignored — add data/ to .gitignore)
+│   ├── edgar/                    # edgartools local storage (~24 GB metadata + filings)
+│   │   ├── reference/            # Ticker and exchange data (~50 MB)
+│   │   ├── companyfacts/         # Company financial facts from XBRL (~2 GB)
+│   │   ├── submissions/          # Company metadata + filing indexes (~5 GB)
+│   │   └── filings/              # Filing documents by date (~50-150 GB/year)
 │   ├── falkordb/                 # FalkorDB RDB persistence (bind-mounted into container)
 │   │   └── dump.rdb
 │   ├── postgres/                 # Langfuse Postgres data (bind-mounted into container)
@@ -268,7 +275,7 @@ investment-researcher/
 │   ├── sqlite/
 │   │   ├── reports.db            # SQLite report queue
 │   │   └── ingestion.db          # Ingestion state tracking
-│   ├── raw/                      # Raw source files (PDFs, CSVs, HTML)
+│   ├── raw/                      # Raw non-SEC source files (PDFs, CSVs, HTML)
 │   └── uploads/                  # Manual upload staging
 │
 └── tests/
