@@ -18,9 +18,15 @@
 | Report Storage | SQLite | 3.x | Report queue, ingestion state tracking |
 | Time Series Store | DuckDB | 1.x+ | Financial metrics time series, macro time series, growth computations. See [02-graph-schema.md](02-graph-schema.md) § Time Series Data Store |
 | CLI Framework | Typer | 0.9+ | Interactive command-line interface |
-| Web Framework | FastAPI | 0.115+ | Financial dashboard REST API + static file serving (Phase 0). Serves analytics endpoints and single-page Chart.js dashboard via `ir web` |
+| Frontend Framework | Nuxt 3 + Vue 3 | 3.x | SSR/SPA framework for the web UI. File-based routing, composables, TypeScript. Simply Wall St-style company profiles + chat interface |
+| UI Components | shadcn-vue | latest | Accessible, professional component primitives (buttons, cards, tabs, dialogs, sheets). Tailwind-based, copy-paste ownership — no heavy dependency |
+| CSS Framework | Tailwind CSS | 3.x | Utility-first styling. Consistent design tokens, responsive, dark-mode ready |
+| Charting | Apache ECharts | 5.x | Rich interactive financial charts — candlestick, bar, line, treemap, pie. Better financial chart vocabulary than Chart.js |
+| Data Tables | TanStack Vue Table | 8.x | Headless table engine for filings lists, financial data grids. Sorting, filtering, pagination |
+| State / Data Fetching | TanStack Vue Query + Pinia | latest | Server-state caching + client-state management. Eliminates manual loading/error boilerplate |
+| Forms / Validation | vee-validate + zod | latest | Schema-driven form validation (search, chat input, filters) |
+| API Backend | FastAPI | 0.115+ | REST API serving analytics, company data, chat SSE streaming. Proxy target for Nuxt `server/api` or direct fetch |
 | Web Server | Uvicorn | 0.30+ | ASGI server for FastAPI. Launched via `ir web` CLI command |
-| Charting | Chart.js | 4.x (CDN) | Interactive financial charts in the web dashboard — bar, line, and mixed charts for revenue, EPS, margins, balance sheet metrics |
 | HTTP Client | httpx | — | Async HTTP for API calls |
 | Container Runtime | Docker + Compose | — | Runs on AMD workstation (RTX 5090). See [08-hardware-requirements.md](08-hardware-requirements.md) |
 
@@ -362,6 +368,144 @@ kg.process_sources([source])
 
 ---
 
+## Frontend (Nuxt 3 + Vue 3) — Deep Dive
+
+### What It Does
+Nuxt 3 is an opinionated full-stack Vue framework with file-based routing, auto-imports, server routes, and SSR/SPA flexibility. Combined with shadcn-vue components and Tailwind CSS, it produces a professional, maintainable frontend without heavy UI framework lock-in.
+
+### Why This Stack
+
+| Decision | Choice | Rationale |
+|----------|--------|----------|
+| Framework | Nuxt 3 (not plain Vite + Vue) | File-based routing, layouts, composables, sensible defaults — less boilerplate to maintain |
+| UI Components | shadcn-vue (not PrimeVue, Vuetify) | Copy-paste ownership, Tailwind-native, professional look without heavy dependency. No version-upgrade breakage risk |
+| Charting | Apache ECharts (not Chart.js) | Richer financial chart vocabulary: candlestick, treemap, heatmap, radar — better fit for "Simply Wall St" style. Better performance at large datasets |
+| Data fetching | TanStack Vue Query (not raw fetch/axios) | Automatic caching, deduplication, background refetch, loading/error states — eliminates boilerplate |
+| State | Pinia | Nuxt-native, lightweight, TypeScript-first client state (user preferences, chat history) |
+| Tables | TanStack Vue Table | Headless — style with Tailwind/shadcn. Sorting, filtering, pagination built-in |
+| Validation | vee-validate + zod | Schema-driven, composable, works with shadcn-vue form components |
+
+### Project Structure
+```
+frontend/
+├── nuxt.config.ts
+├── package.json
+├── tailwind.config.ts
+├── tsconfig.json
+├── app.vue                     # Root layout
+├── pages/
+│   ├── index.vue               # Company search / landing
+│   ├── company/
+│   │   └── [ticker].vue        # Company profile (tabs, charts, chat)
+│   └── chat.vue                # Standalone chat page
+├── components/
+│   ├── ui/                     # shadcn-vue primitives (auto-generated)
+│   │   ├── button/
+│   │   ├── card/
+│   │   ├── tabs/
+│   │   ├── input/
+│   │   ├── sheet/
+│   │   └── ...
+│   ├── company/
+│   │   ├── SearchBar.vue       # Autocomplete search (all SEC tickers)
+│   │   ├── KpiCards.vue        # Revenue, net income, EPS, etc.
+│   │   ├── IncomeTab.vue       # Revenue & net income charts
+│   │   ├── MarginsTab.vue      # Gross/operating/net margin trends
+│   │   ├── BalanceSheetTab.vue # Assets vs. liabilities, D/E ratio
+│   │   ├── CashFlowTab.vue     # Operating/investing/financing breakdown
+│   │   ├── EarningsTab.vue     # EPS trends
+│   │   └── FilingsTab.vue      # Filing list with links to full text
+│   └── chat/
+│       ├── ChatPanel.vue       # Chat input + streaming message display
+│       ├── ChatMessage.vue     # Single message (user/assistant) with citations
+│       └── SourceCitation.vue  # Filing accession number badge
+├── composables/
+│   ├── useCompany.ts           # TanStack Query: fetch company profile
+│   ├── useFinancials.ts        # TanStack Query: fetch metrics by tab
+│   ├── useChat.ts              # SSE streaming chat composable
+│   └── useSearch.ts            # Debounced search with TanStack Query
+├── lib/
+│   ├── api.ts                  # Typed API client (FastAPI base URL)
+│   └── charts.ts               # ECharts option builders per chart type
+├── stores/
+│   └── chat.ts                 # Pinia: chat history within session
+└── public/
+    └── favicon.ico
+```
+
+### API Contract (Frontend ↔ FastAPI)
+
+The Nuxt frontend consumes the FastAPI backend via REST + SSE:
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/api/companies/search?q=` | GET | Autocomplete search by ticker/name |
+| `/api/companies/{ticker}` | GET | Company profile (metadata + latest KPIs) |
+| `/api/companies/{ticker}/financials?tab=income` | GET | Financial data for a specific tab |
+| `/api/companies/{ticker}/filings` | GET | Filing list (form type, date, accession) |
+| `/api/companies/{ticker}/filings/{accession}` | GET | Full filing text (markdown) |
+| `/api/chat` | POST (SSE) | Chat message → streaming LLM response |
+
+### Development & Build
+```bash
+# Development (hot reload)
+cd frontend && npm run dev      # → localhost:3000 (proxies /api → FastAPI :8080)
+
+# Production build
+npm run build                    # → .output/ (Nitro server or static)
+
+# Docker: Nuxt container serves frontend, proxies /api to FastAPI container
+```
+
+### Deployment (Docker)
+```yaml
+# docker-compose.yml (Phase 1 addition)
+frontend:
+  build: ./frontend
+  ports:
+    - "3000:3000"
+  environment:
+    - NUXT_PUBLIC_API_BASE=http://api:8080
+  depends_on:
+    - api
+
+api:
+  build: .
+  ports:
+    - "8080:8080"
+  volumes:
+    - ./data:/app/data
+```
+
+### Key Libraries (package.json)
+```json
+{
+  "dependencies": {
+    "nuxt": "^3.15",
+    "vue": "^3.5",
+    "@tanstack/vue-query": "^5",
+    "@tanstack/vue-table": "^8",
+    "pinia": "^2",
+    "echarts": "^5",
+    "vue-echarts": "^7",
+    "vee-validate": "^4",
+    "zod": "^3",
+    "@vee-validate/zod": "^4"
+  },
+  "devDependencies": {
+    "@nuxtjs/tailwindcss": "^6",
+    "shadcn-nuxt": "latest",
+    "typescript": "^5",
+    "vitest": "^2",
+    "@playwright/test": "^1",
+    "eslint": "^9",
+    "prettier": "^3"
+  }
+}
+```
+
+---
+
 ## OpenAI Agents SDK — Deep Dive
 
 ### What It Does
@@ -548,8 +692,17 @@ dependencies = [
 ## Integration Architecture Diagram
 
 ```
+┌────────────────────────────────────────────────┐
+│  Nuxt 3 Frontend (localhost:3000)               │
+│  Vue 3 + shadcn-vue + Tailwind + ECharts        │
+│                                                 │
+│  /company/[ticker]  /chat  /filings             │
+│  TanStack Vue Query  ◄──── SSE (chat stream)    │
+└───────────┬─────────────────────┬───────────────┘
+            │ REST / SSE          │
+            ▼                     ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                      Python Application                         │
+│                      FastAPI Backend (localhost:8080)            │
 │                                                                 │
 │  ┌─────────────────────────────────────────────────────────┐   │
 │  │  OpenAI Agents SDK                                       │   │

@@ -173,24 +173,26 @@ investment-researcher/
 #### Simply Wall St-Style Web UI
 - [ ] FastAPI backend — `src/investment_researcher/web/app.py`:
   - REST API: company search/autocomplete, company profile endpoint, individual metric queries
-  - Serves static frontend at root
   - Serve filing text via edgartools (`filing.markdown()`) for the chat context
-- [ ] Frontend — `src/investment_researcher/web/static/`:
-  - Company search with autocomplete (search by ticker or name across all SEC companies)
-  - **Company profile page** inspired by Simply Wall St:
+  - Chat SSE endpoint for streaming LLM responses
+- [ ] Nuxt 3 + Vue 3 frontend — `frontend/` (separate directory, **per [05-tech-stack.md](05-tech-stack.md) § Frontend Deep Dive**):
+  - **shadcn-vue** UI components + **Tailwind CSS** for professional, consistent styling
+  - Company search with autocomplete (search by ticker or name across all SEC companies) — `SearchBar.vue` + `useSearch.ts` composable
+  - **Company profile page** (`pages/company/[ticker].vue`) inspired by Simply Wall St:
     - Header: company name, ticker, CIK, SIC industry, last filing date
-    - KPI summary cards: revenue, net income, EPS, total assets, total debt (latest available)
-    - **Income Statement tab**: revenue & net income bar chart over time, EPS line chart, YoY growth indicators
-    - **Margins tab**: gross/operating/net margin trend lines
-    - **Balance Sheet tab**: assets vs. liabilities stacked bars, debt-to-equity trend, current ratio
-    - **Cash Flow tab**: operating/investing/financing cash flow breakdown
-    - **Earnings tab**: EPS trend, quarterly earnings if available
-    - **Filings tab**: list of recent filings (10-K, 10-Q, 8-K) with links to full text view
+    - KPI summary cards: revenue, net income, EPS, total assets, total debt (latest available) — `KpiCards.vue`
+    - **Income Statement tab**: revenue & net income bar chart over time, EPS line chart, YoY growth indicators — `IncomeTab.vue`
+    - **Margins tab**: gross/operating/net margin trend lines — `MarginsTab.vue`
+    - **Balance Sheet tab**: assets vs. liabilities stacked bars, debt-to-equity trend, current ratio — `BalanceSheetTab.vue`
+    - **Cash Flow tab**: operating/investing/financing cash flow breakdown — `CashFlowTab.vue`
+    - **Earnings tab**: EPS trend, quarterly earnings if available — `EarningsTab.vue`
+    - **Filings tab**: list of recent filings (10-K, 10-Q, 8-K) with links to full text view — `FilingsTab.vue`
     - Color-coded growth indicators (green/red for positive/negative trends)
-  - Interactive charts via Chart.js
+  - Interactive charts via **Apache ECharts** (`vue-echarts`) — richer financial chart types than Chart.js
+  - Server-state management via **TanStack Vue Query** (`useCompany.ts`, `useFinancials.ts`) — automatic caching, loading states
   - Responsive design (works on desktop and mobile)
-- [ ] `ir web` CLI command to launch the dashboard server
-- [ ] FastAPI + Uvicorn added to project dependencies — **per [05-tech-stack.md](05-tech-stack.md)**
+- [ ] `ir web` CLI command to launch the FastAPI backend (Nuxt runs separately via `npm run dev` in development, or as a Docker container in production)
+- [ ] FastAPI + Uvicorn + Nuxt added to project dependencies — **per [05-tech-stack.md](05-tech-stack.md)**
 
 #### Local LLM Inference
 - [ ] vLLM (primary) or llama.cpp (fallback) with CUDA on RTX 5090
@@ -200,7 +202,7 @@ investment-researcher/
 - [ ] Model download + setup documented in README
 
 #### Chat Interface (Web-based)
-- [ ] Chat UI component embedded in the web app — text input + streaming response display
+- [ ] Chat panel component (`ChatPanel.vue`) embedded in the company profile page — text input + streaming response display
 - [ ] Chat backend: receives user question + current company context (if viewing a company profile)
 - [ ] **Full-context stuffing** strategy for filing Q&A:
   - When user asks about a specific company, load the most recent 10-K filing text via `filing.markdown()` from edgartools local storage
@@ -236,20 +238,32 @@ investment-researcher/
 ### Deliverables
 ```
 investment-researcher/
-├── docker-compose.yml            ← Phase 0 (unchanged)
+├── docker-compose.yml            ← Phase 0 (expanded: frontend + api services)
 ├── pyproject.toml                ← Phase 0 (expanded: FastAPI, Uvicorn, vLLM/llama-cpp-python)
 ├── .env.example                  ← Phase 0 (expanded: LLM_API_BASE)
+├── frontend/                     ✓  NEW — Nuxt 3 + Vue 3 app (see 05-tech-stack.md § Frontend Deep Dive)
+│   ├── nuxt.config.ts
+│   ├── package.json              ✓  (Nuxt, Vue, shadcn-vue, ECharts, TanStack Query/Table, Pinia)
+│   ├── tailwind.config.ts
+│   ├── pages/
+│   │   ├── index.vue             ✓  NEW — company search landing page
+│   │   └── company/
+│   │       └── [ticker].vue      ✓  NEW — company profile (tabs + chat panel)
+│   ├── components/
+│   │   ├── ui/                   ✓  shadcn-vue primitives (button, card, tabs, input, sheet…)
+│   │   ├── company/              ✓  NEW — SearchBar, KpiCards, IncomeTab, MarginsTab, etc.
+│   │   └── chat/                 ✓  NEW — ChatPanel, ChatMessage, SourceCitation
+│   ├── composables/              ✓  NEW — useCompany, useFinancials, useChat, useSearch
+│   ├── lib/                      ✓  NEW — api.ts (typed client), charts.ts (ECharts options)
+│   └── stores/                   ✓  NEW — chat.ts (Pinia session chat history)
 ├── src/
 │   └── investment_researcher/
 │       ├── config.py             ← Phase 0 (expanded: LLM config)
 │       ├── analytics/
 │       │   └── __init__.py       ✓  NEW — financial analytics (margins, ratios, growth, FY-end detection)
 │       ├── web/
-│       │   ├── app.py            ✓  NEW — FastAPI backend (REST API + chat endpoint + static serving)
-│       │   ├── chat.py           ✓  NEW — chat logic (context stuffing, LLM calls, streaming)
-│       │   └── static/
-│       │       ├── index.html    ✓  NEW — company search + profile page (Chart.js)
-│       │       └── chat.html     ✓  NEW — chat UI component
+│       │   ├── app.py            ✓  NEW — FastAPI backend (REST API + chat SSE endpoint)
+│       │   └── chat.py           ✓  NEW — chat logic (context stuffing, LLM calls, streaming)
 │       ├── ingestion/            ← Phase 0 (unchanged)
 │       └── flows/                ← Phase 0 (unchanged)
 ├── tests/

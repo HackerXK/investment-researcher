@@ -99,10 +99,10 @@ A **one-person institutional research desk** that maintains a living knowledge g
 │                        OUTPUT LAYER                                     │
 │                                                                         │
 │  ┌────────────┐  ┌────────────────────┐  ┌──────────────────────────┐  │
-│  │ CLI Chat   │  │ Financial Dashboard│  │ FalkorDB Browser UI      │  │
-│  │ (ad-hoc    │  │ (ir web → FastAPI  │  │ (graph exploration)      │  │
-│  │  queries)  │  │  + Chart.js)       │  │ localhost:3000            │  │
-│  │            │  │ localhost:8000     │  │                          │  │
+│  │ CLI Chat   │  │ Nuxt 3 + Vue 3    │  │ FalkorDB Browser UI      │  │
+│  │ (ad-hoc    │  │ (shadcn-vue +     │  │ (graph exploration)      │  │
+│  │  queries)  │  │  ECharts)          │  │ localhost:3000            │  │
+│  │            │  │ localhost:3000     │  │                          │  │
 │  └────────────┘  └────────────────────┘  └──────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────────┘
 
