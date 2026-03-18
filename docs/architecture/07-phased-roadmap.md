@@ -77,12 +77,12 @@ Pipeline     Profiles +   Graph +      Data         System       RAG          Au
 
 #### Project Scaffolding
 - [ ] `pyproject.toml` with `investment_researcher` package, edgartools, DuckDB, Prefect, Typer — **MUST use libraries specified in [05-tech-stack.md](05-tech-stack.md)**
-- [ ] `.env.example` — `EDGAR_IDENTITY`, `EDGAR_LOCAL_DATA_DIR=./data/edgar`, `PREFECT_API_URL`
+- [ ] `.env.example` — `EDGAR_IDENTITY`, `EDGAR_LOCAL_DATA_DIR=~/edgar-offline`, `PREFECT_API_URL`
 - [ ] `src/investment_researcher/config.py` — env var loading (future phases expand, never replace)
 - [ ] `cli.py` — Typer CLI with `ingest` command group
 
 #### edgartools Local Storage Setup
-- [ ] Configure `use_local_storage("./data/edgar")` in config module
+- [ ] Configure `use_local_storage("~/edgar-offline")` in config module
 - [ ] `download_edgar_data()` — full metadata download (~24 GB: submissions ~5 GB, companyfacts ~2 GB, reference ~50 MB)
 - [ ] `download_filings("YYYY-01-01:")` — historical filing documents for configurable year range
 - [ ] Verify offline operation: disable network → confirm edgartools reads from local storage
