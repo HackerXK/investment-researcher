@@ -58,28 +58,32 @@ Pipeline     Profiles +   Graph +      Data         System       RAG          Au
 
 > **Infrastructure**: AMD Workstation (RTX 5090 32GB, Ryzen 9 9950X3D, 64GB DDR5) is the Docker host, GPU inference machine, and primary storage (6TB NVMe: 2TB P41 + 4TB SN5000 RAID 0) — **already purchased**. MacBook Pro M2 Pro is the dev terminal only. No NAS needed until Phase 6 (NVMe total hits 70% capacity ~4.2TB). Mac Studio cluster is deferred to Phase 7+, gated on data pipeline maturity. See [08-hardware-requirements.md](08-hardware-requirements.md).
 
-> **Build philosophy**: Every phase extends the previous one — no throwaway code. Phase 0 establishes the data pipeline with Prefect and edgartools, populating DuckDB for all SEC-filing companies. Phase 1 builds a Simply Wall St-style web UI and chat interface on top of that data — all strictly from SEC filings. Subsequent phases add the knowledge graph, external data sources, and multi-agent intelligence layer.
+> **Build philosophy**: Every phase extends the previous one — no throwaway code. Phase 0 establishes the data pipeline as an always-on Docker service with Prefect and edgartools, populating DuckDB for all SEC-filing companies via two ingestion paths (daily fast path + weekly slow path). Phase 1 builds a Simply Wall St-style web UI and chat interface on top of that data — all strictly from SEC filings. Subsequent phases add the knowledge graph, external data sources, and multi-agent intelligence layer.
 
 ---
 
 ## Phase 0: SEC Data Pipeline (Week 1-2)
 
-**Goal**: Build a reliable, scheduled pipeline that fetches all SEC filing data via edgartools, stores it locally for offline/fast access, and populates DuckDB with structured financial metrics for every SEC-filing company. No UI, no graph, no LLM — just rock-solid data ingestion with Prefect orchestration.
+**Goal**: Build a reliable, always-on data service that fetches all SEC filing data via edgartools, stores it locally for offline/fast access, and populates DuckDB with structured financial metrics for every SEC-filing company. Two-path architecture: a daily fast path extracts XBRL directly from new 10-K/10-Q filings (catching data before bulk datasets update), while a weekly slow path re-extracts all companies from bulk companyfacts (catching amendments and corrections). Runs as a Docker container alongside Prefect with managed schedules. No UI, no graph, no LLM — just rock-solid data ingestion.
 
 ### Scope
 - **All SEC-filing companies** (~10,000+) — not a subset
 - **edgartools local storage**: `download_edgar_data()` for metadata (~24 GB: submissions, companyfacts, reference) + `download_filings()` for filing documents (configurable year range, e.g., last 3-5 years)
-- **DuckDB**: Structured financial metrics extracted from edgartools XBRL data (`company.get_financials()`, `company.get_facts()`)
-- **Prefect**: Task orchestration with monitoring dashboard, scheduled flows, failure alerting — foundation for all future ingestion pipelines
-- **No UI, no graph, no chat** — Phase 1 adds those
+- **DuckDB**: Structured financial metrics extracted from both per-filing XBRL (fast path) and companyfacts (slow path) — annual (10-K) and quarterly (10-Q) data
+- **Two-path ingestion**:
+  - **Fast path (daily)**: Download recent filings, parse XBRL directly from individual 10-K/10-Q filings → DuckDB. Catches new data immediately (bypasses companyfacts bulk data delay)
+  - **Slow path (weekly)**: `download_edgar_data()` bulk refresh → re-extract all ~10,000+ companies from companyfacts → DuckDB. Catches amendments, corrections, and late-appearing data. Re-extracting all companies is cheap (local JSON → pandas → DuckDB) and is the only reliable way to detect amended filings
+- **Prefect**: Task orchestration with scheduled deployments, monitoring dashboard, failure alerting — foundation for all future ingestion pipelines
+- **Always-on service**: Docker container that auto-detects empty state and seeds itself on first start, then runs scheduled fast/slow path flows via Prefect
+- **No CLI, no UI, no graph, no chat** — Phase 1 adds UI
 
 ### Tasks
 
 #### Project Scaffolding
-- [ ] `pyproject.toml` with `investment_researcher` package, edgartools, DuckDB, Prefect, Typer — **MUST use libraries specified in [05-tech-stack.md](05-tech-stack.md)**
+- [ ] `pyproject.toml` with `investment_researcher` package, edgartools, DuckDB, Prefect — **MUST use libraries specified in [05-tech-stack.md](05-tech-stack.md)**
 - [ ] `.env.example` — `EDGAR_IDENTITY`, `EDGAR_LOCAL_DATA_DIR=~/edgar-offline`, `PREFECT_API_URL`
 - [ ] `src/investment_researcher/config.py` — env var loading (future phases expand, never replace)
-- [ ] `cli.py` — Typer CLI with `ingest` command group
+- [ ] `Dockerfile` — builds the `ir-service` image from the Python package
 
 #### edgartools Local Storage Setup
 - [ ] Configure `use_local_storage("~/edgar-offline")` in config module
@@ -90,51 +94,76 @@ Pipeline     Profiles +   Graph +      Data         System       RAG          Au
 
 #### DuckDB Financial Data Store
 - [ ] `src/investment_researcher/ingestion/timeseries.py` — DuckDB writer module: initialize `data/duckdb/financial_timeseries.duckdb` with **exact schema** from [02-graph-schema.md](02-graph-schema.md) § Time Series Data Store (`financial_metrics` table with PK `(ticker, metric_type, period_type, period_end)`; `macro_timeseries` table with PK `(indicator_id, date)`). Expose `write_financial_metrics()`
-- [ ] Structured financial data extraction — use **edgartools**: `company.get_financials()` returns parsed income statement, balance sheet, and cash flow as DataFrames; `company.get_facts()` returns all historical XBRL data as structured objects
+- [ ] **Slow-path extraction** (weekly, from bulk companyfacts) — `src/investment_researcher/ingestion/edgar/financials.py`:
+  - Use `company.get_facts()` to extract all historical XBRL data as structured objects
   - Map US GAAP concept names (e.g., `Revenues`, `NetIncomeLoss`, `EarningsPerShareDiluted`) → our `metric_type` names
-  - Filter to 10-K FY entries; de-duplicate by keeping the earliest filing per period to avoid restated comparatives
+  - Extract both 10-K (annual, `period_type='annual'`, `period='FY'`) and 10-Q (quarterly, `period_type='quarterly'`, `period='Q'`) entries
+  - De-duplicate by keeping the earliest filing per period to avoid restated comparatives
   - Write full time series → DuckDB `financial_metrics` table, `accession` column preserved for provenance
-- [ ] Batch processing: iterate all SEC-filing companies, extract financials, write to DuckDB
-- [ ] Ingestion state tracking (SQLite) — track which companies have been processed, last update timestamp
+  - Re-extract ALL ~10,000+ companies weekly — cheap (local JSON → pandas → DuckDB) and the only reliable way to catch amendments to old filings
+- [ ] **Fast-path extraction** (daily, from individual filings) — `src/investment_researcher/ingestion/edgar/fast_path.py`:
+  - Fetch recent filings via `edgar.get_filings()`, filter for 10-K, 10-K/A, 10-Q, 10-Q/A
+  - For each new filing: parse XBRL data directly from the filing document (bypasses companyfacts bulk data delay)
+  - Map XBRL facts → same `metric_type` names as slow path
+  - Write to DuckDB `financial_metrics` — `INSERT OR REPLACE` ensures both paths coexist safely (never deletes absent rows)
+  - Track processed filings by accession number to prevent reprocessing
+- [ ] Ingestion state tracking (SQLite) — `src/investment_researcher/ingestion/state.py`:
+  - Company-level: track last extraction timestamp per ticker (slow path)
+  - Filing-level: track processed accession numbers (fast path dedup)
 
 #### Prefect Orchestration
-- [ ] `src/investment_researcher/flows/sec_data.py` — Prefect flow for the full SEC data pipeline:
-  - Task 1: `sync_edgar_metadata` — incremental `download_edgar_data()` update
-  - Task 2: `sync_edgar_filings` — incremental `download_filings()` for recent dates
-  - Task 3: `extract_financials` — batch extract structured financials → DuckDB for all companies (incremental: skip already-processed)
-- [ ] Prefect deployment with schedule — daily (or configurable) run
-- [ ] Prefect server (`prefect server start`) added to `docker-compose.yml` or run standalone
+- [ ] `src/investment_researcher/flows/sec_data.py` — Prefect flows for the two-path pipeline:
+  - **Seed flow** (`sec-seed`): auto-triggered on empty state — full `download_edgar_data()` + `download_filings()` + batch extract all companies from companyfacts
+  - **Fast-path flow** (`sec-fast-path`): daily — `download_recent_filings()` → parse new 10-K/10-Q XBRL directly from filings → DuckDB
+  - **Slow-path flow** (`sec-slow-path`): weekly — `download_edgar_data()` bulk refresh → re-extract all companies from companyfacts → DuckDB
+- [ ] Prefect deployments with cron schedules — fast path daily (e.g., 6 AM UTC), slow path weekly (e.g., Sunday 2 AM UTC)
+- [ ] Prefect server (`prefect server start`) in `docker-compose.yml`
 - [ ] Failure alerting: Prefect notifications on flow/task failure (email or webhook)
-- [ ] CLI commands: `ir ingest sec --full` (initial seed), `ir ingest sec --incremental` (daily update)
+
+#### Service Container
+- [ ] `src/investment_researcher/service.py` — service entry point:
+  - Auto-detect empty state (no DuckDB file or empty edgartools storage) → run seed flow
+  - After seed, register Prefect deployments (fast-path + slow-path with cron schedules) and serve them (acts as in-process Prefect worker)
+- [ ] `docker-compose.yml` — `ir-service` container alongside Prefect server:
+  - Runs `service.py` as entry point
+  - Mounts `./data` volume for persistent edgartools storage and DuckDB
+  - Connects to Prefect server (`PREFECT_API_URL=http://prefect-server:4200/api`)
+  - Restarts unless stopped
 
 ### Validation Criteria
-- [ ] `ir ingest sec --full` completes: edgartools local storage populated, DuckDB has financial metrics for 1,000+ companies
+- [ ] `docker compose up` starts both Prefect server and ir-service container
+- [ ] First start auto-detects empty state and runs seed flow: edgartools local storage populated, DuckDB has financial metrics for 1,000+ companies
 - [ ] `SELECT COUNT(DISTINCT ticker) FROM financial_metrics` → 1,000+ tickers
 - [ ] `SELECT COUNT(*) FROM financial_metrics` → tens of thousands of rows (multiple metrics × multiple years × companies)
-- [ ] Prefect dashboard (localhost:4200) shows successful flow runs with task-level status
-- [ ] Re-running `ir ingest sec --incremental` skips already-processed data, only fetches new filings
-- [ ] Simulated failure (e.g., kill mid-run) → Prefect shows failed state, re-run recovers gracefully
+- [ ] Prefect dashboard (localhost:4200) shows successful seed flow, then scheduled fast-path and slow-path deployments
+- [ ] Fast path runs daily: picks up new 10-K/10-Q filings filed since last run, writes new metrics to DuckDB
+- [ ] Slow path runs weekly: refreshes companyfacts, re-extracts all companies, catches amendments
+- [ ] Both paths write to same DuckDB table safely (`INSERT OR REPLACE` — upserts, never deletes absent rows)
+- [ ] Simulated failure (e.g., kill mid-run) → Prefect shows failed state, next scheduled run recovers gracefully
 - [ ] Offline test: disconnect network → edgartools reads from local storage → DuckDB queries work
 
 ### Deliverables
 ```
 investment-researcher/
-├── docker-compose.yml            ✓  (Prefect server — future phases add more services)
+├── docker-compose.yml            ✓  (Prefect server + ir-service container)
+├── Dockerfile                    ✓  (ir-service image: Python + investment_researcher package)
 ├── pyproject.toml                ✓  (investment_researcher package, final structure)
 ├── .env.example                  ✓  (EDGAR_IDENTITY, EDGAR_LOCAL_DATA_DIR, PREFECT_API_URL)
 ├── src/
 │   └── investment_researcher/
 │       ├── __init__.py
 │       ├── config.py             ✓  (env var loading)
+│       ├── service.py            ✓  (service entry point: auto-seed → Prefect deployments)
 │       ├── ingestion/
 │       │   ├── edgar/
-│       │   │   └── financials.py ✓  (edgartools: get_financials(), get_facts() → DuckDB)
+│       │   │   ├── storage.py    ✓  (edgartools local storage setup + download helpers)
+│       │   │   ├── financials.py ✓  (slow path: get_facts() → DuckDB, 10-K + 10-Q)
+│       │   │   └── fast_path.py  ✓  (fast path: per-filing XBRL → DuckDB)
 │       │   ├── timeseries.py     ✓  (DuckDB writer: financial_metrics table)
-│       │   └── state.py          ✓  (SQLite ingestion state tracker)
+│       │   └── state.py          ✓  (SQLite: company-level + filing-level state tracking)
 │       └── flows/
-│           └── sec_data.py       ✓  (Prefect flow: sync metadata, sync filings, extract financials)
-├── cli.py                        ✓  (Typer: ingest sec --full / --incremental)
-├── README.md                     ✓  (setup, Prefect dashboard, CLI usage)
+│           └── sec_data.py       ✓  (Prefect flows: seed, fast-path daily, slow-path weekly)
+├── README.md                     ✓  (setup, docker compose, Prefect dashboard)
 ├── data/
 │   ├── edgar/                    ✓  (edgartools local storage — ~24 GB metadata + filing documents)
 │   └── duckdb/
@@ -145,7 +174,7 @@ investment-researcher/
 ### Cost Estimate
 - **Hardware**: AMD workstation already purchased (~$3,764)
 - **API costs**: $0 — edgartools/SEC EDGAR is free (just need a valid User-Agent identity)
-- **Time**: 1–2 weeks (edgartools setup + DuckDB schema + Prefect flows + batch processing)
+- **Time**: 1–2 weeks (edgartools setup + DuckDB schema + Prefect flows + two-path ingestion + Docker service)
 
 ---
 
@@ -191,7 +220,7 @@ investment-researcher/
   - Interactive charts via **Apache ECharts** (`vue-echarts`) — richer financial chart types than Chart.js
   - Server-state management via **TanStack Vue Query** (`useCompany.ts`, `useFinancials.ts`) — automatic caching, loading states
   - Responsive design (works on desktop and mobile)
-- [ ] `ir web` CLI command to launch the FastAPI backend (Nuxt runs separately via `npm run dev` in development, or as a Docker container in production)
+- [ ] FastAPI backend as Docker service in `docker-compose.yml` (Nuxt runs separately via `npm run dev` in development, or as its own Docker container in production)
 - [ ] FastAPI + Uvicorn + Nuxt added to project dependencies — **per [05-tech-stack.md](05-tech-stack.md)**
 
 #### Local LLM Inference
@@ -221,7 +250,7 @@ investment-researcher/
 - [ ] Test runner invocable via `pytest tests/`
 
 ### Validation Criteria
-- [ ] `ir web` launches the web app; homepage shows company search
+- [ ] `docker compose up` starts all services; web UI homepage shows company search
 - [ ] Search "AAPL" → Apple company profile loads with all financial tabs populated
 - [ ] Income Statement tab shows correct multi-year revenue and net income chart
 - [ ] Balance Sheet tab shows assets/liabilities breakdown with debt-to-equity trend
@@ -270,7 +299,6 @@ investment-researcher/
 │   ├── test_analytics.py         ✓  NEW — margin/growth/ratio calculation tests
 │   ├── test_data_integrity.py    ✓  NEW — DuckDB uniqueness, NULLs, FY-end filtering
 │   └── test_crossvalidation.py   ✓  NEW — compare DuckDB values vs third-party source
-├── cli.py                        ← Phase 0 (expanded: `ir web` command)
 ├── data/                         ← Phase 0 (unchanged)
 └── models/
     └── qwen2.5-32b-q4.gguf      ✓  (~20 GB — local LLM for chat)
@@ -309,7 +337,7 @@ investment-researcher/
 - [ ] Generate `summary`, `risk_factors`, `opportunities` on Company node via LLM extraction from 10-K text
 - [ ] Prefect flow: `extract_entities` — batch entity extraction across all companies, integrated into the SEC data pipeline
 - [ ] Start with ~50 semiconductor companies for initial quality validation, then scale
-- [ ] CLI commands: `ir ingest extract --ticker AAPL`, `ir ingest extract --all`
+- [ ] Entity extraction integrated into Prefect-scheduled pipeline (runs after new filings are processed)
 
 #### Graph-Aware Chat Enhancement
 - [ ] Expand Phase 1 chat to also query FalkorDB for relationship data
@@ -425,13 +453,13 @@ schemas/
 
 #### Report & Paper Trading
 - [ ] Report queue (SQLite) — report schema per [04-agent-system.md](04-agent-system.md) § 6. Research Synthesizer
-- [ ] Human review workflow: `ir reports review <id>`
+- [ ] Human review workflow: report review via web UI
 - [ ] Paper trading: auto-record trades for confidence > 0.6, track 30/60/90 day outcomes per [04-agent-system.md](04-agent-system.md) § Paper Trading Protocol
 
 #### Web UI Integration
 - [ ] Chat routes through Triage Agent (replaces Phase 1's direct LLM chat)
 - [ ] Report viewer in web UI
-- [ ] Thesis exploration: `ir explore "thesis statement"` via CLI or web
+- [ ] Thesis exploration via web UI
 
 #### Monetization — Start Revenue Streams
 > See [09-monetization-strategy.md](09-monetization-strategy.md)
