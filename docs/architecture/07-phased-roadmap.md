@@ -80,51 +80,51 @@ Pipeline     Profiles +   Graph +      Data         System       RAG          Au
 ### Tasks
 
 #### Project Scaffolding
-- [ ] `pyproject.toml` with `investment_researcher` package, edgartools, DuckDB, Prefect — **MUST use libraries specified in [05-tech-stack.md](05-tech-stack.md)**
-- [ ] `.env.example` — `EDGAR_IDENTITY`, `EDGAR_LOCAL_DATA_DIR=~/edgar-offline`, `PREFECT_API_URL`
-- [ ] `src/investment_researcher/config.py` — env var loading (future phases expand, never replace)
-- [ ] `Dockerfile` — builds the `ir-service` image from the Python package
+- [x] `pyproject.toml` with `investment_researcher` package, edgartools, DuckDB, Prefect — **MUST use libraries specified in [05-tech-stack.md](05-tech-stack.md)**
+- [x] `.env.example` — `EDGAR_IDENTITY`, `EDGAR_LOCAL_DATA_DIR=~/edgar-offline`, `PREFECT_API_URL`
+- [x] `src/investment_researcher/config.py` — env var loading (future phases expand, never replace)
+- [x] `Dockerfile` — builds the `ir-service` image from the Python package
 
 #### edgartools Local Storage Setup
-- [ ] Configure `use_local_storage("~/edgar-offline")` in config module
-- [ ] `download_edgar_data()` — full metadata download (~24 GB: submissions ~5 GB, companyfacts ~2 GB, reference ~50 MB)
-- [ ] `download_filings("YYYY-01-01:")` — historical filing documents for configurable year range
+- [x] Configure `use_local_storage("~/edgar-offline")` in config module
+- [x] `download_edgar_data()` — full metadata download (~24 GB: submissions ~5 GB, companyfacts ~2 GB, reference ~50 MB)
+- [x] `download_filings("YYYY-01-01:")` — historical filing documents for configurable year range
 - [ ] Verify offline operation: disable network → confirm edgartools reads from local storage
-- [ ] See [05-tech-stack.md](05-tech-stack.md) § edgartools Local Storage for full setup details
+- [x] See [05-tech-stack.md](05-tech-stack.md) § edgartools Local Storage for full setup details
 
 #### DuckDB Financial Data Store
-- [ ] `src/investment_researcher/ingestion/timeseries.py` — DuckDB writer module: initialize `data/duckdb/financial_timeseries.duckdb` with **exact schema** from [02-graph-schema.md](02-graph-schema.md) § Time Series Data Store (`financial_metrics` table with PK `(ticker, metric_type, period_type, period_end)`; `macro_timeseries` table with PK `(indicator_id, date)`). Expose `write_financial_metrics()`
-- [ ] **Slow-path extraction** (weekly, from bulk companyfacts) — `src/investment_researcher/ingestion/edgar/financials.py`:
+- [x] `src/investment_researcher/ingestion/timeseries.py` — DuckDB writer module: initialize `data/duckdb/financial_timeseries.duckdb` with **exact schema** from [02-graph-schema.md](02-graph-schema.md) § Time Series Data Store (`financial_metrics` table with PK `(ticker, metric_type, period_type, period_end)`; `macro_timeseries` table with PK `(indicator_id, date)`). Expose `write_financial_metrics()`
+- [x] **Slow-path extraction** (weekly, from bulk companyfacts) — `src/investment_researcher/ingestion/edgar/financials.py`:
   - Use `company.get_facts()` to extract all historical XBRL data as structured objects
   - Map US GAAP concept names (e.g., `Revenues`, `NetIncomeLoss`, `EarningsPerShareDiluted`) → our `metric_type` names
-  - Extract both 10-K (annual, `period_type='annual'`, `period='FY'`) and 10-Q (quarterly, `period_type='quarterly'`, `period='Q'`) entries
+  - Extract both 10-K (annual, `period_type='annual'`, `period='Twelve Months Ended ...'`) and 10-Q (quarterly, `period_type='quarterly'`, `period='Quarter Ended ...'`) entries
   - De-duplicate by keeping the earliest filing per period to avoid restated comparatives
   - Write full time series → DuckDB `financial_metrics` table, `accession` column preserved for provenance
   - Re-extract ALL ~10,000+ companies weekly — cheap (local JSON → pandas → DuckDB) and the only reliable way to catch amendments to old filings
-- [ ] **Fast-path extraction** (daily, from individual filings) — `src/investment_researcher/ingestion/edgar/fast_path.py`:
+- [x] **Fast-path extraction** (daily, from individual filings) — `src/investment_researcher/ingestion/edgar/fast_path.py`:
   - Fetch recent filings via `edgar.get_filings()`, filter for 10-K, 10-K/A, 10-Q, 10-Q/A
   - For each new filing: parse XBRL data directly from the filing document (bypasses companyfacts bulk data delay)
   - Map XBRL facts → same `metric_type` names as slow path
   - Write to DuckDB `financial_metrics` — `INSERT OR REPLACE` ensures both paths coexist safely (never deletes absent rows)
   - Track processed filings by accession number to prevent reprocessing
-- [ ] Ingestion state tracking (SQLite) — `src/investment_researcher/ingestion/state.py`:
+- [x] Ingestion state tracking (SQLite) — `src/investment_researcher/ingestion/state.py`:
   - Company-level: track last extraction timestamp per ticker (slow path)
   - Filing-level: track processed accession numbers (fast path dedup)
 
 #### Prefect Orchestration
-- [ ] `src/investment_researcher/flows/sec_data.py` — Prefect flows for the two-path pipeline:
+- [x] `src/investment_researcher/flows/sec_data.py` — Prefect flows for the two-path pipeline:
   - **Seed flow** (`sec-seed`): auto-triggered on empty state — full `download_edgar_data()` + `download_filings()` + batch extract all companies from companyfacts
   - **Fast-path flow** (`sec-fast-path`): daily — `download_recent_filings()` → parse new 10-K/10-Q XBRL directly from filings → DuckDB
   - **Slow-path flow** (`sec-slow-path`): weekly — `download_edgar_data()` bulk refresh → re-extract all companies from companyfacts → DuckDB
-- [ ] Prefect deployments with cron schedules — fast path daily (e.g., 6 AM UTC), slow path weekly (e.g., Sunday 2 AM UTC)
-- [ ] Prefect server (`prefect server start`) in `docker-compose.yml`
+- [x] Prefect deployments with cron schedules — fast path daily (e.g., 6 AM UTC), slow path weekly (e.g., Sunday 2 AM UTC)
+- [x] Prefect server (`prefect server start`) in `docker-compose.yml`
 - [ ] Failure alerting: Prefect notifications on flow/task failure (email or webhook)
 
 #### Service Container
-- [ ] `src/investment_researcher/service.py` — service entry point:
+- [x] `src/investment_researcher/service.py` — service entry point:
   - Auto-detect empty state (no DuckDB file or empty edgartools storage) → run seed flow
   - After seed, register Prefect deployments (fast-path + slow-path with cron schedules) and serve them (acts as in-process Prefect worker)
-- [ ] `docker-compose.yml` — `ir-service` container alongside Prefect server:
+- [x] `docker-compose.yml` — `ir-service` container alongside Prefect server:
   - Runs `service.py` as entry point
   - Mounts `./data` volume for persistent edgartools storage and DuckDB
   - Connects to Prefect server (`PREFECT_API_URL=http://prefect-server:4200/api`)
@@ -133,12 +133,12 @@ Pipeline     Profiles +   Graph +      Data         System       RAG          Au
 ### Validation Criteria
 - [ ] `docker compose up` starts both Prefect server and ir-service container
 - [ ] First start auto-detects empty state and runs seed flow: edgartools local storage populated, DuckDB has financial metrics for 1,000+ companies
-- [ ] `SELECT COUNT(DISTINCT ticker) FROM financial_metrics` → 1,000+ tickers
-- [ ] `SELECT COUNT(*) FROM financial_metrics` → tens of thousands of rows (multiple metrics × multiple years × companies)
+- [x] `SELECT COUNT(DISTINCT ticker) FROM financial_metrics` → 1,000+ tickers
+- [x] `SELECT COUNT(*) FROM financial_metrics` → tens of thousands of rows (multiple metrics × multiple years × companies)
 - [ ] Prefect dashboard (localhost:4200) shows successful seed flow, then scheduled fast-path and slow-path deployments
-- [ ] Fast path runs daily: picks up new 10-K/10-Q filings filed since last run, writes new metrics to DuckDB
-- [ ] Slow path runs weekly: refreshes companyfacts, re-extracts all companies, catches amendments
-- [ ] Both paths write to same DuckDB table safely (`INSERT OR REPLACE` — upserts, never deletes absent rows)
+- [x] Fast path runs daily: picks up new 10-K/10-Q filings filed since last run, writes new metrics to DuckDB
+- [x] Slow path runs weekly: refreshes companyfacts, re-extracts all companies, catches amendments
+- [x] Both paths write to same DuckDB table safely (`INSERT OR REPLACE` — upserts, never deletes absent rows)
 - [ ] Simulated failure (e.g., kill mid-run) → Prefect shows failed state, next scheduled run recovers gracefully
 - [ ] Offline test: disconnect network → edgartools reads from local storage → DuckDB queries work
 

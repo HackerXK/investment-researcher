@@ -1,0 +1,31 @@
+services:
+  prefect-server:
+    image: prefecthq/prefect:3-latest
+    command: prefect server start --host 0.0.0.0
+    ports:
+      - "4200:4200"
+    volumes:
+      - prefect-data:/root/.prefect
+    restart: unless-stopped
+
+  ir-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      - prefect-server
+    environment:
+      - EDGAR_IDENTITY=${EDGAR_IDENTITY}
+      - EDGAR_LOCAL_DATA_DIR=${EDGAR_LOCAL_DATA_DIR}
+      - DUCKDB_PATH=/app/data/duckdb/financial_timeseries.duckdb
+      - STATE_DB_PATH=/app/data/state/ingestion_state.db
+      - PREFECT_API_URL=http://prefect-server:4200/api
+      - EDGAR_FILINGS_START_DATE=${EDGAR_FILINGS_START_DATE}
+    volumes:
+      - ${EDGAR_LOCAL_DATA_DIR}:/app/data/edgar
+      - ${DUCKDB_DIR}:/app/data/duckdb
+      - ${STATE_DIR}:/app/data/state
+    restart: unless-stopped
+
+volumes:
+  prefect-data:

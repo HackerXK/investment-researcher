@@ -696,7 +696,7 @@ CREATE TABLE financial_metrics (
     metric_type  VARCHAR NOT NULL,   -- 'revenue', 'net_income', 'eps', 'gross_margin', ...
     value        DOUBLE NOT NULL,
     currency     VARCHAR DEFAULT 'USD',
-    period       VARCHAR NOT NULL,   -- 'Q3-2025', 'FY-2025'
+    period       VARCHAR NOT NULL,   -- 'Quarter Ended 09/30/2025', 'Twelve Months Ended 09/30/2025'
     period_type  VARCHAR NOT NULL,   -- 'quarterly', 'annual', 'ttm'
     period_end   DATE NOT NULL,      -- 2025-09-30
     source       VARCHAR,            -- '10-K', '10-Q', 'fmp', 'polygon'

@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "investment-researcher"
+version = "0.1.0"
+description = "SEC data pipeline and investment research platform"
+requires-python = ">=3.12"
+dependencies = [
+    "edgartools==5.28.2",
+    "duckdb>=1.0",
+    "prefect>=3.0",
+    "python-dotenv>=1.0",
+    "pandas>=2.0",
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+demo = [
+    "streamlit>=1.30",
+    "plotly>=5.18",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/investment_researcher"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "tests/fixtures"]
+markers = [
+    "integration: tests that hit the real SEC EDGAR API (slow, requires network)",
+]
