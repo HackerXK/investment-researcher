@@ -221,7 +221,117 @@ class TestFastPathExtraction:
         assert f2 <= f1
 
 
-class TestBothPathsCoexist:
+class TestFastPathTickerScope:
+    """Unit tests verifying the RAW_FILING_TICKERS guard in process_recent_filings."""
+
+    def _make_mock_filing(self, accession: str, cik: int, form: str = "10-K"):
+        """Build a minimal mock filing object."""
+        m = MagicMock()
+        m.accession_no = accession
+        m.cik = str(cik)
+        m.form = form
+        m.filing_date = "2024-01-15"
+        return m
+
+    @patch("investment_researcher.ingestion.edgar.fast_path.mark_filings_processed_batch")
+    @patch("investment_researcher.ingestion.edgar.fast_path.get_processed_accessions")
+    @patch("investment_researcher.ingestion.edgar.fast_path._extract_metrics_from_filing")
+    @patch("investment_researcher.ingestion.edgar.fast_path._get_cik_ticker_map")
+    @patch("investment_researcher.ingestion.edgar.fast_path.edgar")
+    @patch("investment_researcher.ingestion.edgar.fast_path.RAW_FILING_TICKERS", frozenset({"AAPL"}))
+    def test_out_of_scope_ticker_is_skipped(
+        self, mock_edgar, mock_cik_map, mock_extract, mock_processed, mock_mark, db_paths
+    ):
+        """Filings for tickers outside RAW_FILING_TICKERS are not extracted."""
+        db, state = db_paths
+
+        # AAPL → CIK 320193, MSFT → CIK 789019
+        mock_cik_map.return_value = {320193: "AAPL", 789019: "MSFT"}
+        mock_processed.return_value = set()
+
+        # Single filing for MSFT (out of scope)
+        msft_filing = self._make_mock_filing("0000789019-24-000001", 789019)
+        mock_filings = MagicMock()
+        mock_filings.__len__ = MagicMock(return_value=1)
+        mock_filings.__getitem__ = MagicMock(return_value=msft_filing)
+        mock_edgar.get_filings.return_value = mock_filings
+
+        filings_processed, total_rows = process_recent_filings(
+            days=1, db_path=db, state_db_path=state
+        )
+
+        # MSFT should never be extracted
+        mock_extract.assert_not_called()
+        assert filings_processed == 0
+
+    @patch("investment_researcher.ingestion.edgar.fast_path.mark_filings_processed_batch")
+    @patch("investment_researcher.ingestion.edgar.fast_path.get_processed_accessions")
+    @patch("investment_researcher.ingestion.edgar.fast_path.write_financial_metrics")
+    @patch("investment_researcher.ingestion.edgar.fast_path._extract_metrics_from_filing")
+    @patch("investment_researcher.ingestion.edgar.fast_path._get_cik_ticker_map")
+    @patch("investment_researcher.ingestion.edgar.fast_path.edgar")
+    @patch("investment_researcher.ingestion.edgar.fast_path.RAW_FILING_TICKERS", frozenset({"AAPL"}))
+    def test_in_scope_ticker_is_extracted(
+        self, mock_edgar, mock_cik_map, mock_extract, mock_write, mock_processed, mock_mark, db_paths
+    ):
+        """Filings for tickers inside RAW_FILING_TICKERS are extracted."""
+        db, state = db_paths
+
+        mock_cik_map.return_value = {320193: "AAPL"}
+        mock_processed.return_value = set()
+
+        aapl_filing = self._make_mock_filing("0000320193-24-000001", 320193)
+        mock_filings = MagicMock()
+        mock_filings.__len__ = MagicMock(return_value=1)
+        mock_filings.__getitem__ = MagicMock(return_value=aapl_filing)
+        mock_edgar.get_filings.return_value = mock_filings
+
+        mock_df = pd.DataFrame([{
+            "ticker": "AAPL", "metric_type": "revenue",
+            "period_type": "annual", "period_end": "2023-09-30",
+            "value": 385e9, "filing_date": "2024-01-15",
+        }])
+        mock_extract.return_value = mock_df
+        mock_write.return_value = 1
+
+        filings_processed, total_rows = process_recent_filings(
+            days=1, db_path=db, state_db_path=state
+        )
+
+        mock_extract.assert_called_once()
+        assert filings_processed == 1
+        assert total_rows == 1
+
+    @patch("investment_researcher.ingestion.edgar.fast_path.mark_filings_processed_batch")
+    @patch("investment_researcher.ingestion.edgar.fast_path.get_processed_accessions")
+    @patch("investment_researcher.ingestion.edgar.fast_path._extract_metrics_from_filing")
+    @patch("investment_researcher.ingestion.edgar.fast_path._get_cik_ticker_map")
+    @patch("investment_researcher.ingestion.edgar.fast_path.edgar")
+    @patch("investment_researcher.ingestion.edgar.fast_path.RAW_FILING_TICKERS", None)
+    def test_all_mode_processes_any_ticker(
+        self, mock_edgar, mock_cik_map, mock_extract, mock_processed, mock_mark, db_paths
+    ):
+        """When RAW_FILING_TICKERS is None (ALL), every ticker is processed."""
+        db, state = db_paths
+
+        # NVDA → CIK 1045810; no filtering expected
+        mock_cik_map.return_value = {1045810: "NVDA"}
+        mock_processed.return_value = set()
+        mock_extract.return_value = None  # no metrics, but extraction is attempted
+
+        nvda_filing = self._make_mock_filing("0001045810-24-000001", 1045810)
+        mock_filings = MagicMock()
+        mock_filings.__len__ = MagicMock(return_value=1)
+        mock_filings.__getitem__ = MagicMock(return_value=nvda_filing)
+        mock_edgar.get_filings.return_value = mock_filings
+
+        process_recent_filings(days=1, db_path=db, state_db_path=state)
+
+        # NVDA should still be passed to extraction
+        mock_extract.assert_called_once()
+
+
+
     """Verify slow and fast paths write to same DuckDB tables safely."""
 
     def test_both_paths_write_safely(self, db_paths):

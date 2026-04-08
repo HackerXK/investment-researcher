@@ -7,7 +7,7 @@ import duckdb
 import numpy as np
 import pandas as pd
 
-from investment_researcher.config import DUCKDB_PATH
+from investment_researcher.config import DUCKDB_PATH_RUNTIME
 from investment_researcher.metrics import compute_ttm_metrics
 from investment_researcher.ratios import (
     compute_ratios,
@@ -16,7 +16,7 @@ from investment_researcher.ratios import (
     latest_ratios,
 )
 
-_DB_PATH = DUCKDB_PATH
+_DB_PATH = DUCKDB_PATH_RUNTIME
 
 
 def _con() -> duckdb.DuckDBPyConnection:

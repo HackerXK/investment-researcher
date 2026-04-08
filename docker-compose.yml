@@ -7,24 +7,39 @@ services:
     volumes:
       - prefect-data:/root/.prefect
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4200/api/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
 
   ir-service:
     build:
       context: .
       dockerfile: Dockerfile
     depends_on:
-      - prefect-server
+      prefect-server:
+        condition: service_healthy
     environment:
       - EDGAR_IDENTITY=${EDGAR_IDENTITY}
-      - EDGAR_LOCAL_DATA_DIR=${EDGAR_LOCAL_DATA_DIR}
-      - DUCKDB_PATH=/app/data/duckdb/financial_timeseries.duckdb
-      - STATE_DB_PATH=/app/data/state/ingestion_state.db
+      - EDGAR_LOCAL_DATA_DIR_RUNTIME=${EDGAR_LOCAL_DATA_DIR_RUNTIME}
+      - DUCKDB_PATH_RUNTIME=${DUCKDB_PATH_RUNTIME}
+      - STATE_DB_PATH_RUNTIME=${STATE_DB_PATH_RUNTIME}
       - PREFECT_API_URL=http://prefect-server:4200/api
       - EDGAR_FILINGS_START_DATE=${EDGAR_FILINGS_START_DATE}
+      - EDGAR_RAW_FILING_TICKERS=${EDGAR_RAW_FILING_TICKERS}
+      - FORCE_SEED=${FORCE_SEED:-false}
     volumes:
-      - ${EDGAR_LOCAL_DATA_DIR}:/app/data/edgar
-      - ${DUCKDB_DIR}:/app/data/duckdb
-      - ${STATE_DIR}:/app/data/state
+      - type: bind
+        source: ${EDGAR_LOCAL_DATA_DIR_HOST_SOURCE}
+        target: ${EDGAR_LOCAL_DATA_DIR_RUNTIME}
+      - type: bind
+        source: ${DUCKDB_DIR_HOST_SOURCE}
+        target: ${DUCKDB_DIR_RUNTIME}
+      - type: bind
+        source: ${STATE_DIR_HOST_SOURCE}
+        target: ${STATE_DIR_RUNTIME}
     restart: unless-stopped
 
 volumes:

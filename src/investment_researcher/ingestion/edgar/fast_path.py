@@ -9,8 +9,10 @@ import logging
 from datetime import date, datetime, timedelta
 from functools import lru_cache
 
+import edgar
 import pandas as pd
 
+from investment_researcher.config import RAW_FILING_TICKERS
 from investment_researcher.ingestion.edgar.financials import (
     FLOW_METRICS,
     RAW_CONCEPT_MAP,
@@ -260,10 +262,20 @@ def process_recent_filings(
     Returns:
         Tuple of (filings_processed, total_rows_written).
     """
-    import edgar
-
     since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
-    logger.info("Fast path: fetching filings since %s", since)
+
+    if RAW_FILING_TICKERS is None:
+        logger.info(
+            "Fast path: fetching filings since %s (ALL tickers, EDGAR_RAW_FILING_TICKERS=ALL)",
+            since,
+        )
+    else:
+        logger.info(
+            "Fast path: fetching filings since %s (%d tickers in scope: %s)",
+            since,
+            len(RAW_FILING_TICKERS),
+            ", ".join(sorted(RAW_FILING_TICKERS)),
+        )
 
     cik_ticker_map = _get_cik_ticker_map()
     # Load all processed accessions once — O(1) lookup instead of per-filing DB query
@@ -299,6 +311,12 @@ def process_recent_filings(
             ticker = cik_ticker_map.get(cik)
             if not ticker:
                 logger.debug("No ticker found for CIK %s, skipping", cik)
+                continue
+
+            # Enforce raw-filing ticker scope.  If RAW_FILING_TICKERS is None,
+            # ALL mode is active and every ticker is processed.
+            if RAW_FILING_TICKERS is not None and ticker not in RAW_FILING_TICKERS:
+                logger.debug("Ticker %s not in RAW_FILING_TICKERS scope, skipping", ticker)
                 continue
 
             # Extract metrics — let transient XBRL failures propagate

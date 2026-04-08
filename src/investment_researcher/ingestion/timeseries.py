@@ -10,7 +10,7 @@ from pathlib import Path
 import duckdb
 import pandas as pd
 
-from investment_researcher.config import DUCKDB_PATH
+from investment_researcher.config import DUCKDB_PATH_RUNTIME as DUCKDB_PATH
 
 logger = logging.getLogger(__name__)
 

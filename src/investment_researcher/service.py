@@ -10,6 +10,7 @@ On startup:
 import logging
 import sys
 
+from investment_researcher.config import FORCE_SEED
 from investment_researcher.ingestion.edgar.storage import configure_edgar, is_storage_empty
 from investment_researcher.ingestion.timeseries import initialize_db, is_db_empty
 from investment_researcher.ingestion.state import initialize_state_db
@@ -34,8 +35,17 @@ def run_service():
     configure_edgar()
 
     # Auto-detect empty state and seed
-    if is_storage_empty() or is_db_empty():
-        logger.info("Empty state detected — running seed flow...")
+    storage_empty = is_storage_empty()
+    db_empty = is_db_empty()
+    logger.info(
+        "Startup state check: storage_empty=%s db_empty=%s force_seed=%s",
+        storage_empty,
+        db_empty,
+        FORCE_SEED,
+    )
+    if FORCE_SEED or storage_empty or db_empty:
+        reason = "FORCE_SEED=true" if FORCE_SEED else "empty state detected"
+        logger.info("Running seed flow (%s)...", reason)
         from investment_researcher.flows.sec_data import seed_flow
 
         seed_flow()

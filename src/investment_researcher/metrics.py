@@ -13,7 +13,7 @@ from __future__ import annotations
 import duckdb
 import numpy as np
 
-from investment_researcher.config import DUCKDB_PATH
+from investment_researcher.config import DUCKDB_PATH_RUNTIME as DUCKDB_PATH
 from investment_researcher.ingestion.edgar.financials import FLOW_METRICS
 
 # ── Math / lookup helpers ─────────────────────────────────────────────────────

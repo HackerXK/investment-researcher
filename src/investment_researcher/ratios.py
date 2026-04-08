@@ -19,7 +19,7 @@ import duckdb
 import numpy as np
 import pandas as pd
 
-from investment_researcher.config import DUCKDB_PATH
+from investment_researcher.config import DUCKDB_PATH_RUNTIME as DUCKDB_PATH
 from investment_researcher.ingestion.edgar.financials import FLOW_METRICS
 from investment_researcher.metrics import (
     _get,
