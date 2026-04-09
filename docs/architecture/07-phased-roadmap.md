@@ -89,7 +89,7 @@ Pipeline     Profiles +   Graph +      Data         System       RAG          Au
 - [x] Configure `use_local_storage("~/edgar-offline")` in config module
 - [x] `download_edgar_data()` — full metadata download (~24 GB: submissions ~5 GB, companyfacts ~2 GB, reference ~50 MB)
 - [x] `download_filings("YYYY-01-01:")` — historical filing documents for configurable year range
-- [ ] Verify offline operation: disable network → confirm edgartools reads from local storage
+- [x] Verify offline operation: disable network → confirm edgartools reads from local storage
 - [x] See [05-tech-stack.md](05-tech-stack.md) § edgartools Local Storage for full setup details
 
 #### DuckDB Financial Data Store
@@ -131,11 +131,11 @@ Pipeline     Profiles +   Graph +      Data         System       RAG          Au
   - Restarts unless stopped
 
 ### Validation Criteria
-- [ ] `docker compose up` starts both Prefect server and ir-service container
-- [ ] First start auto-detects empty state and runs seed flow: edgartools local storage populated, DuckDB has financial metrics for 1,000+ companies
+- [x] `docker compose up` starts both Prefect server and ir-service container
+- [x] First start auto-detects empty state and runs seed flow: edgartools local storage populated, DuckDB has financial metrics for 1,000+ companies
 - [x] `SELECT COUNT(DISTINCT ticker) FROM financial_metrics` → 1,000+ tickers
 - [x] `SELECT COUNT(*) FROM financial_metrics` → tens of thousands of rows (multiple metrics × multiple years × companies)
-- [ ] Prefect dashboard (localhost:4200) shows successful seed flow, then scheduled fast-path and slow-path deployments
+- [x] Prefect dashboard (localhost:4200) shows successful seed flow, then scheduled fast-path and slow-path deployments
 - [x] Fast path runs daily: picks up new 10-K/10-Q filings filed since last run, writes new metrics to DuckDB
 - [x] Slow path runs weekly: refreshes companyfacts, re-extracts all companies, catches amendments
 - [x] Both paths write to same DuckDB table safely (`INSERT OR REPLACE` — upserts, never deletes absent rows)
