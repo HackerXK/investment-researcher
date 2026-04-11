@@ -224,11 +224,8 @@ investment-researcher/
 - [x] FastAPI + Uvicorn + Nuxt added to project dependencies — **per [05-tech-stack.md](05-tech-stack.md)**
 
 #### Local LLM Inference
-- [ ] vLLM (primary) or llama.cpp (fallback) with CUDA on RTX 5090
-- [ ] Qwen 2.5 32B Q4_K_M (~20 GB VRAM, 30-50 tok/s) for chat responses
-- [ ] OpenAI-compatible API endpoint at `http://localhost:8000/v1`
+- [x] OpenAI-compatible API endpoint at `http://192.168.1.138:1234/v1`
 - [x] `EDGAR_IDENTITY` and `LLM_API_BASE` in config
-- [ ] Model download + setup documented in README
 
 #### Chat Interface (Web-based)
 - [x] Chat panel component (`ChatPanel.vue`) embedded in the company profile page — text input + streaming response display

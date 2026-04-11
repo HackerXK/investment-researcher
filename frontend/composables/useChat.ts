@@ -57,7 +57,8 @@ export function useChat(ticker: Ref<string>) {
             if (data === '[DONE]') continue
             try {
               const parsed = JSON.parse(data)
-              const delta = parsed.choices?.[0]?.delta?.content
+              if (parsed.error) throw new Error(parsed.error)
+              const delta = parsed.token ?? parsed.choices?.[0]?.delta?.content
               if (delta) {
                 // Update the last assistant message reactively
                 const idx = messages.value.length - 1
