@@ -61,5 +61,60 @@ services:
         target: ${STATE_DIR_RUNTIME}
     restart: unless-stopped
 
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "-m", "uvicorn", "investment_researcher.web.app:app", "--host", "0.0.0.0", "--port", "8080"]
+    ports:
+      - "8080:8080"
+    depends_on:
+      prefect-server:
+        condition: service_healthy
+    environment:
+      - EDGAR_IDENTITY=${EDGAR_IDENTITY}
+      - EDGAR_LOCAL_DATA_DIR_RUNTIME=${EDGAR_LOCAL_DATA_DIR_RUNTIME}
+      - DUCKDB_PATH_RUNTIME=${DUCKDB_PATH_RUNTIME}
+      - STATE_DB_PATH_RUNTIME=${STATE_DB_PATH_RUNTIME}
+      - LLM_API_BASE=${LLM_API_BASE:-http://host.docker.internal:8000/v1}
+      - LLM_MODEL=${LLM_MODEL:-Qwen/Qwen2.5-32B-Instruct}
+      - LLM_API_KEY=${LLM_API_KEY:-EMPTY}
+    volumes:
+      - type: bind
+        source: ${EDGAR_LOCAL_DATA_DIR_HOST_SOURCE}
+        target: ${EDGAR_LOCAL_DATA_DIR_RUNTIME}
+        read_only: true
+      - type: bind
+        source: ${DUCKDB_DIR_HOST_SOURCE}
+        target: ${DUCKDB_DIR_RUNTIME}
+        read_only: true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/docs')"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      - NUXT_API_BASE=http://api:8080
+      - NUXT_PUBLIC_API_BASE=http://api:8080
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
 volumes:
   prefect-pg-data:

@@ -67,3 +67,14 @@ def _parse_raw_filing_tickers(value: str | None) -> frozenset[str] | None:
 RAW_FILING_TICKERS: frozenset[str] | None = _parse_raw_filing_tickers(
     os.getenv("EDGAR_RAW_FILING_TICKERS")
 )
+
+# ── Phase 1: Web API & LLM ──────────────────────────────────────────────────
+
+# FastAPI host/port
+WEB_HOST: str = os.getenv("WEB_HOST", "0.0.0.0")
+WEB_PORT: int = int(os.getenv("WEB_PORT", "8080"))
+
+# Local LLM inference (OpenAI-compatible endpoint served by vLLM)
+LLM_API_BASE: str = os.getenv("LLM_API_BASE", "http://localhost:8000/v1")
+LLM_MODEL: str = os.getenv("LLM_MODEL", "Qwen/Qwen2.5-32B-Instruct")
+LLM_API_KEY: str = os.getenv("LLM_API_KEY", "EMPTY")

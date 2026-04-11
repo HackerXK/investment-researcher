@@ -192,7 +192,7 @@ investment-researcher/
 ### Tasks
 
 #### Analytics Layer
-- [ ] `src/investment_researcher/analytics/__init__.py` — financial analytics module querying DuckDB:
+- [x] `src/investment_researcher/analytics/__init__.py` — financial analytics module querying DuckDB:
   - Auto-detect each company's fiscal year-end month (edgartools financial data includes comparative and quarterly values mixed into annual filings; must filter correctly)
   - Annual and quarterly time series with YoY/QoQ growth computed via SQL window functions per [02-graph-schema.md](02-graph-schema.md) § Growth Rate Strategy
   - Derived metrics: gross margin, operating margin, net margin, EPS trends, debt-to-equity, current ratio, ROE, ROA, free cash flow
@@ -200,11 +200,11 @@ investment-researcher/
   - Note: P/E, P/S, and other valuation ratios deferred to Phase 3 (require market price data from FMP)
 
 #### Simply Wall St-Style Web UI
-- [ ] FastAPI backend — `src/investment_researcher/web/app.py`:
+- [x] FastAPI backend — `src/investment_researcher/web/app.py`:
   - REST API: company search/autocomplete, company profile endpoint, individual metric queries
   - Serve filing text via edgartools (`filing.markdown()`) for the chat context
   - Chat SSE endpoint for streaming LLM responses
-- [ ] Nuxt 3 + Vue 3 frontend — `frontend/` (separate directory, **per [05-tech-stack.md](05-tech-stack.md) § Frontend Deep Dive**):
+- [x] Nuxt 3 + Vue 3 frontend — `frontend/` (separate directory, **per [05-tech-stack.md](05-tech-stack.md) § Frontend Deep Dive**):
   - **shadcn-vue** UI components + **Tailwind CSS** for professional, consistent styling
   - Company search with autocomplete (search by ticker or name across all SEC companies) — `SearchBar.vue` + `useSearch.ts` composable
   - **Company profile page** (`pages/company/[ticker].vue`) inspired by Simply Wall St:
@@ -220,49 +220,49 @@ investment-researcher/
   - Interactive charts via **Apache ECharts** (`vue-echarts`) — richer financial chart types than Chart.js
   - Server-state management via **TanStack Vue Query** (`useCompany.ts`, `useFinancials.ts`) — automatic caching, loading states
   - Responsive design (works on desktop and mobile)
-- [ ] FastAPI backend as Docker service in `docker-compose.yml` (Nuxt runs separately via `npm run dev` in development, or as its own Docker container in production)
-- [ ] FastAPI + Uvicorn + Nuxt added to project dependencies — **per [05-tech-stack.md](05-tech-stack.md)**
+- [x] FastAPI backend as Docker service in `docker-compose.yml` (Nuxt runs separately via `npm run dev` in development, or as its own Docker container in production)
+- [x] FastAPI + Uvicorn + Nuxt added to project dependencies — **per [05-tech-stack.md](05-tech-stack.md)**
 
 #### Local LLM Inference
 - [ ] vLLM (primary) or llama.cpp (fallback) with CUDA on RTX 5090
 - [ ] Qwen 2.5 32B Q4_K_M (~20 GB VRAM, 30-50 tok/s) for chat responses
 - [ ] OpenAI-compatible API endpoint at `http://localhost:8000/v1`
-- [ ] `EDGAR_IDENTITY` and `LLM_API_BASE` in config
+- [x] `EDGAR_IDENTITY` and `LLM_API_BASE` in config
 - [ ] Model download + setup documented in README
 
 #### Chat Interface (Web-based)
-- [ ] Chat panel component (`ChatPanel.vue`) embedded in the company profile page — text input + streaming response display
-- [ ] Chat backend: receives user question + current company context (if viewing a company profile)
-- [ ] **Full-context stuffing** strategy for filing Q&A:
+- [x] Chat panel component (`ChatPanel.vue`) embedded in the company profile page — text input + streaming response display
+- [x] Chat backend: receives user question + current company context (if viewing a company profile)
+- [x] **Full-context stuffing** strategy for filing Q&A:
   - When user asks about a specific company, load the most recent 10-K filing text via `filing.markdown()` from edgartools local storage
   - Stuff the full filing text (~50-100K tokens) into the LLM context window (Qwen 2.5 32B supports 128K context)
   - Prepend structured financial summary from DuckDB as system context
   - LLM answers based on both structured data and raw filing text
-- [ ] For general questions (not company-specific): provide DuckDB financial data as context, let LLM reason over it
-- [ ] Streaming responses via SSE (Server-Sent Events) for responsive UX
-- [ ] Chat history within session (not persisted across page reloads for now)
-- [ ] Source attribution: when answering from filing text, cite the filing accession number and section
+- [x] For general questions (not company-specific): provide DuckDB financial data as context, let LLM reason over it
+- [x] Streaming responses via SSE (Server-Sent Events) for responsive UX
+- [x] Chat history within session (not persisted across page reloads for now)
+- [x] Source attribution: when answering from filing text, cite the filing accession number and section
 
 #### Financial Data Validation & Testing
-- [ ] Unit tests for the analytics layer: verify margin, growth-rate, and ratio calculations against hand-computed expected values
-- [ ] Data integrity tests on the DuckDB store: no duplicate (ticker, metric, period) rows, no NULL values in required columns, fiscal year-end filtering produces exactly one row per year
-- [ ] **Third-party cross-validation test**: for at least two tickers, fetch the same metrics (revenue, net income, EPS) from a reputable public source and assert they match within ≤1% tolerance
-- [ ] Test runner invocable via `pytest tests/`
+- [x] Unit tests for the analytics layer: verify margin, growth-rate, and ratio calculations against hand-computed expected values
+- [x] Data integrity tests on the DuckDB store: no duplicate (ticker, metric, period) rows, no NULL values in required columns, fiscal year-end filtering produces exactly one row per year
+- [x] **Third-party cross-validation test**: for at least two tickers, fetch the same metrics (revenue, net income, EPS) from a reputable public source and assert they match within ≤1% tolerance
+- [x] Test runner invocable via `pytest tests/`
 
 ### Validation Criteria
-- [ ] `docker compose up` starts all services; web UI homepage shows company search
-- [ ] Search "AAPL" → Apple company profile loads with all financial tabs populated
-- [ ] Income Statement tab shows correct multi-year revenue and net income chart
-- [ ] Balance Sheet tab shows assets/liabilities breakdown with debt-to-equity trend
-- [ ] Margins tab shows gross/operating/net margin trends that match SEC filings
-- [ ] Filing tab lists recent 10-K, 10-Q, 8-K filings
-- [ ] Browse to any of 1,000+ companies — all have profile data (coverage depends on Phase 0 DuckDB seeding)
+- [x] `docker compose up` starts all services; web UI homepage shows company search
+- [x] Search "AAPL" → Apple company profile loads with all financial tabs populated
+- [x] Income Statement tab shows correct multi-year revenue and net income chart
+- [x] Balance Sheet tab shows assets/liabilities breakdown with debt-to-equity trend
+- [x] Margins tab shows gross/operating/net margin trends that match SEC filings
+- [x] Filing tab lists recent 10-K, 10-Q, 8-K filings
+- [x] Browse to any of 1,000+ companies — all have profile data (coverage depends on Phase 0 DuckDB seeding)
 - [ ] Chat: "What are Apple's main risk factors?" → LLM responds with specific risks from the latest 10-K, citing the filing
 - [ ] Chat: "Compare Intel and AMD revenue trends" → LLM pulls structured data from DuckDB for both companies
 - [ ] Chat: "What did TSMC say about AI demand in their latest annual report?" → LLM answers from full filing text
 - [ ] Chat responses stream in real-time (not blocked until complete)
-- [ ] All analytics unit tests pass (`pytest tests/`)
-- [ ] Cross-validation passes for at least two tickers
+- [x] All analytics unit tests pass (`pytest tests/`)
+- [x] Cross-validation passes for at least two tickers
 
 ### Deliverables
 ```
