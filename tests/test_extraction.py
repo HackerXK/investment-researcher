@@ -15,9 +15,6 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 import pytest
 
-# Set a default identity for tests
-os.environ.setdefault("EDGAR_IDENTITY", "test@example.com")
-
 import edgar
 
 from investment_researcher.ingestion.edgar.financials import (

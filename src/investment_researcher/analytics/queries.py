@@ -1,7 +1,12 @@
-"""Data access layer for the demo dashboard.
+"""DuckDB query layer for the analytics module.
 
-Thin wrapper around DuckDB queries returning pandas DataFrames.
+Provides all financial data queries (time-series, pivots, growth rates,
+TTM metrics, quarterly detail, cross-company lookups) used by the web API.
+
+This is a standalone module — it does NOT depend on ``demo.data``.
 """
+
+from __future__ import annotations
 
 import duckdb
 import numpy as np
@@ -24,6 +29,7 @@ def _con() -> duckdb.DuckDBPyConnection:
 
 
 # ── Ticker helpers ───────────────────────────────────────────────────────────
+
 
 def get_all_tickers() -> list[str]:
     """Return a sorted list of every ticker in the database."""
@@ -64,6 +70,7 @@ def ticker_summary(
 
 
 # ── Time-series queries ─────────────────────────────────────────────────────
+
 
 def metric_timeseries(
     ticker: str,
@@ -123,7 +130,10 @@ def growth_rates(
 
 # ── Cross-company queries ────────────────────────────────────────────────────
 
-def latest_metric_for_all(metric_type: str, period_type: str = "annual", limit: int = 20) -> pd.DataFrame:
+
+def latest_metric_for_all(
+    metric_type: str, period_type: str = "annual", limit: int = 20
+) -> pd.DataFrame:
     """Top *limit* companies by the latest value of *metric_type*."""
     con = _con()
     try:
@@ -148,16 +158,16 @@ def latest_metric_for_all(metric_type: str, period_type: str = "annual", limit: 
 
 # ── TTM and quarterly detail ─────────────────────────────────────────────────
 
+
 def ttm_metrics(
     ticker: str,
     metrics: list[str],
 ) -> dict[str, float]:
     """Compute Trailing Twelve Months for the requested *metrics*.
 
-    Delegates to the backend :func:`compute_ttm_metrics` which handles
-    flow-metric summation, stock-metric snapshots, annual fallbacks, and
-    derived-metric enrichment.  The result is filtered to only the requested
-    metric names.
+    Delegates to :func:`compute_ttm_metrics` which handles flow-metric
+    summation, stock-metric snapshots, annual fallbacks, and derived-metric
+    enrichment.  The result is filtered to only the requested metric names.
     """
     all_ttm = compute_ttm_metrics(ticker, db_path=_DB_PATH)
     return {m: all_ttm[m] for m in metrics if m in all_ttm}
@@ -226,9 +236,7 @@ def quarterly_detail(
     # the currently selected quarter window.
     pivot = pivot.reindex(metrics)
 
-    # Track recency per metric across all available quarterly rows.  This lets
-    # the UI suppress stale TTM values for metrics that are no longer reported
-    # in recent filings.
+    # Track recency per metric across all available quarterly rows.
     con = _con()
     try:
         placeholders = ", ".join(f"'{m}'" for m in metrics)
@@ -251,8 +259,7 @@ def quarterly_detail(
     )
 
     # Add TTM column, but only when the metric is current through the latest
-    # visible quarter. Otherwise TTM can look deceptively "fresh" even when the
-    # underlying metric has not been reported for several quarters.
+    # visible quarter.
     ttm = ttm_metrics(ticker, metrics)
     pivot.insert(
         0,
@@ -269,15 +276,13 @@ def quarterly_detail(
 
 # ── Ratio convenience functions ──────────────────────────────────────────────
 
+
 def ratio_timeseries(
     ticker: str,
     ratio_names: list[str] | None = None,
     period_type: str = "annual",
 ) -> pd.DataFrame:
-    """Return ratio values over time (long-form).
-
-    Delegates to ratios.compute_ratios().
-    """
+    """Return ratio values over time (long-form)."""
     return compute_ratios(ticker, period_type, ratio_names)
 
 
@@ -298,5 +303,5 @@ def all_ratios_latest(
 
 
 def all_ratios_ttm(ticker: str) -> dict[str, float]:
-    """Return TTM (Trailing Twelve Months) value for every computable ratio."""
+    """Return TTM value for every computable ratio."""
     return compute_ttm_ratios(ticker)

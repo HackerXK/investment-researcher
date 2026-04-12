@@ -7,7 +7,7 @@ import duckdb
 import pandas as pd
 import pytest
 
-from investment_researcher.demo import data as demo_data
+from investment_researcher.analytics import queries as analytics_queries
 from investment_researcher.ingestion.timeseries import (
     get_connection,
     initialize_db,
@@ -328,9 +328,9 @@ class TestQuarterlyDetail:
         ])
         write_financial_metrics(df, db_path=tmp_db)
 
-        monkeypatch.setattr(demo_data, "_DB_PATH", tmp_db)
+        monkeypatch.setattr(analytics_queries, "_DB_PATH", tmp_db)
 
-        result = demo_data.quarterly_detail(
+        result = analytics_queries.quarterly_detail(
             "AAPL",
             ["revenue", "interest_expense"],
             n_quarters=2,

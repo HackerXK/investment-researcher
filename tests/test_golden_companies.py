@@ -1,12 +1,9 @@
 """Parametrized golden-data tests shared across all company datasets."""
 
-import os
 from dataclasses import dataclass
 from datetime import date
 
 import pytest
-
-os.environ.setdefault("EDGAR_IDENTITY", "test@example.com")
 
 from golden_aapl import AAPL_ANNUAL_GOLDEN, AAPL_QUARTERLY_GOLDEN
 from golden_helpers import GoldenMetric, assert_value_close, extract_ticker_rows, find_match

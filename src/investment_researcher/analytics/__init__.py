@@ -1,8 +1,9 @@
-"""Financial analytics module — thin wrapper over existing data layer.
+"""Financial analytics module — public API for the FastAPI backend.
 
-Provides a clean public API for the FastAPI backend by re-exporting
-functions from ``demo.data``, ``metrics``, and ``ratios``, plus new
-helpers for company search and SEC filing access via edgartools.
+Consolidates DuckDB queries (``analytics.queries``), metric helpers
+(``metrics``), and ratio computations (``ratios``) into a single
+importable surface.  Also provides company search and SEC filing
+access via edgartools.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ import numpy as np
 import pandas as pd
 
 from investment_researcher.config import DUCKDB_PATH_RUNTIME
-from investment_researcher.demo.data import (
+from investment_researcher.analytics.queries import (
     get_all_tickers,
     growth_rates,
     latest_metric_for_all,
@@ -24,12 +25,10 @@ from investment_researcher.demo.data import (
     quarterly_detail,
     ticker_summary,
     ttm_metrics,
-)
-from investment_researcher.demo.data import (
+    ratio_timeseries,
     all_ratios_latest as _ratios_latest,
     all_ratios_ttm as _ratios_ttm,
     all_ratios_wide as _ratios_wide,
-    ratio_timeseries,
 )
 from investment_researcher.ratios import (
     RATIO_CATEGORIES,

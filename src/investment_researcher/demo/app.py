@@ -16,7 +16,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from investment_researcher.demo.data import (
+from investment_researcher.analytics.queries import (
     all_ratios_latest,
     all_ratios_ttm,
     all_ratios_wide,
