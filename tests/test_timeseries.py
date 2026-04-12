@@ -9,6 +9,7 @@ import pytest
 
 from investment_researcher.analytics import queries as analytics_queries
 from investment_researcher.ingestion.timeseries import (
+    delete_company_financial_metrics,
     get_connection,
     initialize_db,
     is_db_empty,
@@ -278,6 +279,50 @@ class TestIsDbEmpty:
         }])
         write_financial_metrics(df, db_path=tmp_db)
         assert is_db_empty(tmp_db) is False
+
+
+class TestDeleteCompanyFinancialMetrics:
+    def test_deletes_only_requested_ticker_rows(self, tmp_db):
+        initialize_db(db_path=tmp_db)
+        df = pd.DataFrame([
+            {
+                "ticker": "AAPL",
+                "metric_type": "revenue",
+                "value": 100.0,
+                "period": "Twelve Months Ended 09/30/2023",
+                "period_type": "annual",
+                "period_end": "2023-09-30",
+            },
+            {
+                "ticker": "AAPL",
+                "metric_type": "net_income",
+                "value": 50.0,
+                "period": "Twelve Months Ended 09/30/2023",
+                "period_type": "annual",
+                "period_end": "2023-09-30",
+            },
+            {
+                "ticker": "MSFT",
+                "metric_type": "revenue",
+                "value": 200.0,
+                "period": "Twelve Months Ended 06/30/2023",
+                "period_type": "annual",
+                "period_end": "2023-06-30",
+            },
+        ])
+        write_financial_metrics(df, db_path=tmp_db)
+
+        deleted = delete_company_financial_metrics(["aapl"], db_path=tmp_db)
+
+        assert deleted == 2
+        con = get_connection(tmp_db)
+        try:
+            remaining = con.execute(
+                "SELECT ticker, metric_type FROM financial_metrics ORDER BY ticker, metric_type"
+            ).fetchall()
+            assert remaining == [("MSFT", "revenue")]
+        finally:
+            con.close()
 
 
 class TestQuarterlyDetail:

@@ -3,12 +3,13 @@
 
 Usage:
     FMP_API_KEY=your_key python scripts/build_golden_ttm_ratios.py
+    FMP_API_KEY=your_key python scripts/build_golden_ttm_ratios.py AMZN
 
 Fetches from:
   - /stable/ratios-ttm?symbol={TICKER}
   - /stable/key-metrics-ttm?symbol={TICKER}
 
-Outputs tests/golden_ttm_ratios_{ticker}.py for each ticker.
+Outputs tests/fixtures/golden_ttm_ratios_{ticker}.py for each ticker.
 """
 
 import os
@@ -19,7 +20,7 @@ import requests
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-TICKERS = ["AAPL", "NVDA", "UNH", "WMT", "XOM"]
+TICKERS = ["AAPL", "AMZN", "NVDA", "UNH", "WMT", "XOM"]
 
 FMP_BASE = "https://financialmodelingprep.com/stable"
 
@@ -84,6 +85,8 @@ DOLLAR_RATIOS = {"working_capital", "net_debt"}
 # not be treated as golden truth.
 EXCLUDED_TTM_GOLDEN_POINTS = {
     ("AAPL", "interest_coverage_ratio"),
+    ("AMZN", "cash_per_share"),
+    ("AMZN", "working_capital"),
 }
 
 
@@ -181,9 +184,15 @@ def main():
         print("ERROR: Set FMP_API_KEY environment variable", file=sys.stderr)
         sys.exit(1)
 
-    outdir = PROJECT_ROOT / "tests"
+    outdir = PROJECT_ROOT / "tests" / "fixtures"
 
-    for ticker in TICKERS:
+    tickers = [t.upper() for t in sys.argv[1:]] if len(sys.argv) > 1 else TICKERS
+    unknown = sorted(set(tickers) - set(TICKERS))
+    if unknown:
+        print(f"ERROR: Unknown ticker(s): {', '.join(unknown)}", file=sys.stderr)
+        sys.exit(1)
+
+    for ticker in tickers:
         print(f"\n{'='*60}")
         print(f"Fetching TTM data for {ticker}...")
         all_entries: list[dict] = []

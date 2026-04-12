@@ -8,6 +8,7 @@ import pytest
 from investment_researcher.ingestion.edgar.financials import (
     _extract_from_raw_df,
     _make_period_label,
+    _select_annual_flow_rows,
 )
 
 
@@ -27,9 +28,9 @@ class TestQuarterDecomposition:
         ytd_6m_val: float = 250.0,
         ytd_9m_val: float = 400.0,
         fy_val: float = 600.0,
+        concept: str = "us-gaap:Revenues",
     ) -> pd.DataFrame:
         """Build a synthetic raw DataFrame mimicking edgartools to_dataframe()."""
-        concept = "us-gaap:Revenues"
         fy_year = 2024
         # Apple-like fiscal year: Oct 1 - Sep 30
         rows = [
@@ -155,6 +156,97 @@ class TestQuarterDecomposition:
         assert q2 == pytest.approx(-70.0), f"Q2 = -120 - (-50) = -70, got {q2}"
         assert q3 == pytest.approx(-80.0), f"Q3 = -200 - (-120) = -80, got {q3}"
         assert q4 == pytest.approx(-80.0), f"Q4 = -280 - (-200) = -80, got {q4}"
+
+    def test_ignores_non_fy_annual_candidates_for_flow_metrics(self):
+        raw_df = pd.DataFrame([
+            {
+                "concept": "us-gaap:NetIncomeLoss",
+                "period_start": date(2022, 7, 1),
+                "period_end": date(2023, 6, 30),
+                "numeric_value": 500.0,
+                "unit": "USD",
+                "fiscal_period": "Q2",
+                "fiscal_year": 2023,
+            },
+            {
+                "concept": "us-gaap:NetIncomeLoss",
+                "period_start": date(2022, 10, 1),
+                "period_end": date(2023, 9, 30),
+                "numeric_value": 550.0,
+                "unit": "USD",
+                "fiscal_period": "Q3",
+                "fiscal_year": 2023,
+            },
+            {
+                "concept": "us-gaap:NetIncomeLoss",
+                "period_start": date(2023, 4, 1),
+                "period_end": date(2023, 6, 30),
+                "numeric_value": 125.0,
+                "unit": "USD",
+                "fiscal_period": "FY",
+                "fiscal_year": 2023,
+            },
+            {
+                "concept": "us-gaap:NetIncomeLoss",
+                "period_start": date(2023, 1, 1),
+                "period_end": date(2023, 12, 31),
+                "numeric_value": 600.0,
+                "unit": "USD",
+                "fiscal_period": "FY",
+                "fiscal_year": 2023,
+            },
+        ])
+
+        rows = self._extract_metric(raw_df, metric_type="net_income")
+
+        annual_periods = sorted(
+            r["period_end"]
+            for r in rows
+            if r["period_type"] == "annual"
+        )
+        assert annual_periods == [date(2023, 12, 31)]
+        assert self._get_value(rows, "annual", date(2023, 6, 30)) is None
+        assert self._get_value(rows, "annual", date(2023, 9, 30)) is None
+        assert self._get_value(rows, "annual", date(2023, 12, 31)) == pytest.approx(600.0)
+
+    def test_prefers_best_duplicate_fy_row_for_same_period_end(self):
+        ts_df = pd.DataFrame([
+            {
+                "period_end": date(2024, 12, 31),
+                "numeric_value": 14_200_000_000.0,
+                "fiscal_period": "FY",
+                "fiscal_year": 2024,
+            },
+            {
+                "period_end": date(2024, 12, 31),
+                "numeric_value": 637_959_000_000.0,
+                "fiscal_period": "FY",
+                "fiscal_year": 2025,
+            },
+            {
+                "period_end": date(2025, 12, 31),
+                "numeric_value": 17_400_000_000.0,
+                "fiscal_period": "FY",
+                "fiscal_year": 2025,
+            },
+            {
+                "period_end": date(2025, 12, 31),
+                "numeric_value": 716_924_000_000.0,
+                "fiscal_period": "FY",
+                "fiscal_year": 2025,
+            },
+        ])
+
+        selected = _select_annual_flow_rows(ts_df)
+
+        rows = {
+            row.period_end: row.numeric_value
+            for row in selected.itertuples()
+        }
+        assert rows == {
+            date(2024, 12, 31): pytest.approx(637_959_000_000.0),
+            date(2025, 12, 31): pytest.approx(716_924_000_000.0),
+        }
 
     def test_make_period_label_quarterly(self):
         assert _make_period_label(date(2024, 9, 30), "quarterly") == "Quarter Ended 09/30/2024"

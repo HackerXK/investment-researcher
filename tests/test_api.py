@@ -170,6 +170,44 @@ async def test_filings(client: AsyncClient):
         assert "filing_date" in f
 
 
+@pytest.mark.asyncio
+async def test_rerun_slow_path_endpoint(client: AsyncClient, monkeypatch):
+    captured = {}
+
+    def fake_rerun(tickers):
+        captured["tickers"] = tickers
+        return [
+            {
+                "ticker": "AMZN",
+                "deleted_rows": 10,
+                "deleted_state_rows": 1,
+                "written_rows": 25,
+            }
+        ]
+
+    monkeypatch.setattr("investment_researcher.web.app.initialize_db", lambda: None)
+    monkeypatch.setattr("investment_researcher.web.app.initialize_state_db", lambda: None)
+    monkeypatch.setattr("investment_researcher.web.app.rerun_slow_path_for_companies", fake_rerun)
+
+    resp = await client.post(
+        "/api/companies/slow-path/rerun",
+        json={"tickers": ["amzn", " "]},
+    )
+
+    assert resp.status_code == 200
+    assert captured["tickers"] == ["AMZN"]
+    payload = resp.json()
+    assert payload["tickers"] == ["AMZN"]
+    assert payload["total_deleted_rows"] == 10
+    assert payload["total_written_rows"] == 25
+
+
+@pytest.mark.asyncio
+async def test_rerun_slow_path_requires_tickers(client: AsyncClient):
+    resp = await client.post("/api/companies/slow-path/rerun", json={"tickers": []})
+    assert resp.status_code == 400
+
+
 # ── JSON serialization (no NaN/Inf) ───────────────────────────────
 
 

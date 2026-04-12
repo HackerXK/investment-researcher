@@ -25,6 +25,7 @@ from investment_researcher.ingestion.edgar.financials import (
     _extract_from_raw_df,
     extract_company_facts,
     get_all_tickers,
+    rerun_slow_path_for_companies,
 )
 from investment_researcher.ingestion.edgar.fast_path import (
     process_recent_filings,
@@ -32,10 +33,11 @@ from investment_researcher.ingestion.edgar.fast_path import (
     _extract_metrics_from_filing,
 )
 from investment_researcher.ingestion.timeseries import (
+    write_financial_metrics,
     get_connection,
     initialize_db,
 )
-from investment_researcher.ingestion.state import initialize_state_db
+from investment_researcher.ingestion.state import initialize_state_db, update_company_extraction
 
 
 @pytest.fixture
@@ -149,6 +151,132 @@ class TestSlowPathExtraction:
             # Two extractions should give the same row count (upserts, not duplicates)
             assert total == count1 or total == count2
 
+    def test_rerun_selected_companies_deletes_then_reextracts(self, db_paths, monkeypatch):
+        db, state = db_paths
+
+        write_financial_metrics(
+            pd.DataFrame([
+                {
+                    "ticker": "AAPL",
+                    "metric_type": "revenue",
+                    "value": 100.0,
+                    "period": "Twelve Months Ended 09/30/2023",
+                    "period_type": "annual",
+                    "period_end": "2023-09-30",
+                },
+                {
+                    "ticker": "MSFT",
+                    "metric_type": "revenue",
+                    "value": 200.0,
+                    "period": "Twelve Months Ended 06/30/2023",
+                    "period_type": "annual",
+                    "period_end": "2023-06-30",
+                },
+            ]),
+            db_path=db,
+        )
+        update_company_extraction("AAPL", db_path=state)
+        update_company_extraction("MSFT", db_path=state)
+
+        monkeypatch.setattr(
+            "investment_researcher.ingestion.edgar.storage.configure_edgar",
+            lambda: None,
+        )
+
+        def fake_extract_company_facts(ticker, cik=None, db_path=None, state_db_path=None):
+            write_financial_metrics(
+                pd.DataFrame([
+                    {
+                        "ticker": ticker,
+                        "metric_type": "revenue",
+                        "value": 999.0,
+                        "period": "Twelve Months Ended 09/30/2024",
+                        "period_type": "annual",
+                        "period_end": "2024-09-30",
+                    }
+                ]),
+                db_path=db_path,
+            )
+            update_company_extraction(ticker, db_path=state_db_path)
+            return 1
+
+        monkeypatch.setattr(
+            "investment_researcher.ingestion.edgar.financials.extract_company_facts",
+            fake_extract_company_facts,
+        )
+
+        results = rerun_slow_path_for_companies(["aapl"], db_path=db, state_db_path=state)
+
+        assert results == [
+            {
+                "ticker": "AAPL",
+                "deleted_rows": 1,
+                "deleted_state_rows": 1,
+                "written_rows": 1,
+            }
+        ]
+
+        with _db_connection(db) as con:
+            rows = con.execute(
+                "SELECT ticker, value, period_end FROM financial_metrics ORDER BY ticker, period_end"
+            ).fetchall()
+            assert rows == [
+                ("AAPL", 999.0, date(2024, 9, 30)),
+                ("MSFT", 200.0, date(2023, 6, 30)),
+            ]
+
+    def test_derives_missing_gross_profit_and_operating_expenses(self, db_paths):
+        db, state = db_paths
+
+        facts = MagicMock()
+
+        def fake_time_series(_name):
+            return pd.DataFrame()
+
+        facts.time_series = fake_time_series
+
+        query_mock = MagicMock()
+        query_mock.by_concept.return_value.execute.return_value = []
+        facts.query.return_value = query_mock
+
+        facts.to_dataframe = MagicMock(return_value=pd.DataFrame({
+            "concept": [
+                "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+                "us-gaap:CostOfRevenue",
+                "us-gaap:OperatingIncomeLoss",
+            ],
+            "fiscal_period": ["FY", "FY", "FY"],
+            "period_end": [date(2024, 12, 31)] * 3,
+            "period_start": [date(2024, 1, 1)] * 3,
+            "fiscal_year": [2024, 2024, 2024],
+            "numeric_value": [1000.0, 620.0, 180.0],
+            "unit": ["USD", "USD", "USD"],
+        }))
+
+        company = MagicMock()
+        company.cik = 1018724
+        company.get_facts.return_value = facts
+
+        with patch("edgar.Company", return_value=company):
+            count = extract_company_facts("AMZN", db_path=db, state_db_path=state)
+
+        assert count == 5
+
+        with _db_connection(db) as con:
+            rows = con.execute(
+                "SELECT metric_type, value, source FROM financial_metrics "
+                "WHERE ticker = 'AMZN' AND period_type = 'annual' "
+                "ORDER BY metric_type"
+            ).fetchall()
+
+        assert rows == [
+            ("cost_of_revenue", 620.0, "10-K"),
+            ("gross_profit", 380.0, "10-K-derived"),
+            ("operating_expenses", 200.0, "10-K-derived"),
+            ("operating_income", 180.0, "10-K"),
+            ("revenue", 1000.0, "10-K"),
+        ]
+
 
 class TestFastPathExtraction:
     """Tests for per-filing XBRL → DuckDB extraction."""
@@ -216,6 +344,45 @@ class TestFastPathExtraction:
         # Second run should process no more than the first (transient XBRL
         # failures are retried, but successfully-parsed filings are not).
         assert f2 <= f1
+
+    def test_extract_from_filing_derives_missing_income_statement_lines(self):
+        filing = MagicMock()
+        filing.accession_no = "0001018724-24-000001"
+        filing.form = "10-K"
+
+        facts = MagicMock()
+        facts.to_dataframe.return_value = pd.DataFrame({
+            "concept": [
+                "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+                "us-gaap:CostOfRevenue",
+                "us-gaap:OperatingIncomeLoss",
+            ],
+            "fiscal_period": ["FY", "FY", "FY"],
+            "period_end": [date(2024, 12, 31)] * 3,
+            "period_start": [date(2024, 1, 1)] * 3,
+            "numeric_value": [1000.0, 620.0, 180.0],
+            "unit_ref": ["USD", "USD", "USD"],
+            "fiscal_year": [2024, 2024, 2024],
+            "is_dimensioned": [False, False, False],
+        })
+
+        xbrl = MagicMock()
+        xbrl.facts = facts
+        filing.xbrl.return_value = xbrl
+
+        df = _extract_metrics_from_filing(filing, "AMZN", "1018724")
+
+        assert df is not None
+        rows = sorted(
+            df[["metric_type", "value", "source", "accession"]].itertuples(index=False, name=None)
+        )
+        assert rows == [
+            ("cost_of_revenue", 620.0, "10-K", "0001018724-24-000001"),
+            ("gross_profit", 380.0, "10-K-derived", "0001018724-24-000001"),
+            ("operating_expenses", 200.0, "10-K-derived", "0001018724-24-000001"),
+            ("operating_income", 180.0, "10-K", "0001018724-24-000001"),
+            ("revenue", 1000.0, "10-K", "0001018724-24-000001"),
+        ]
 
 
 class TestFastPathTickerScope:

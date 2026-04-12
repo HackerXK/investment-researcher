@@ -13,8 +13,11 @@ from __future__ import annotations
 import duckdb
 import numpy as np
 
-from investment_researcher.config import DUCKDB_PATH_RUNTIME as DUCKDB_PATH
+from investment_researcher.config import DUCKDB_PATH_RUNTIME
 from investment_researcher.ingestion.edgar.financials import FLOW_METRICS
+
+
+TTM_MAX_FLOW_STALENESS_DAYS = 130
 
 # ── Math / lookup helpers ─────────────────────────────────────────────────────
 
@@ -152,9 +155,22 @@ def compute_ttm_metrics(
     Returns:
         dict mapping metric_type → TTM value.
     """
-    path = db_path or DUCKDB_PATH
+    path = db_path or DUCKDB_PATH_RUNTIME
     con = duckdb.connect(path, read_only=True)
     try:
+        latest_quarterly_pe_row = con.execute(
+            """
+            SELECT MAX(period_end)
+            FROM financial_metrics
+            WHERE ticker = $1
+              AND period_type = 'quarterly'
+            """,
+            [ticker],
+        ).fetchone()
+        latest_quarterly_pe = latest_quarterly_pe_row[0] if latest_quarterly_pe_row else None
+        if hasattr(latest_quarterly_pe, "date"):
+            latest_quarterly_pe = latest_quarterly_pe.date()
+
         # ── Flow metrics: sum of 4 most recent quarters ───────────────
         flow_df = con.execute(
             f"""
@@ -169,17 +185,26 @@ def compute_ttm_metrics(
                   AND period_type = 'quarterly'
                   AND metric_type IN ({_FLOW_PH})
             )
-            SELECT metric_type, SUM(value) AS ttm_value, COUNT(*) AS n
+            SELECT metric_type, value, period_end
             FROM ranked WHERE rn <= 4
-            GROUP BY metric_type
             """,
             [ticker],
         ).df()
 
         ttm: dict[str, float] = {}
-        for _, row in flow_df.iterrows():
-            if row["n"] == 4:
-                ttm[row["metric_type"]] = row["ttm_value"]
+        if latest_quarterly_pe is not None and not flow_df.empty:
+            for metric_type, metric_rows in flow_df.groupby("metric_type"):
+                metric_rows = metric_rows.sort_values("period_end", ascending=False)
+                if len(metric_rows) != 4:
+                    continue
+
+                latest_metric_pe = metric_rows.iloc[0]["period_end"]
+                if hasattr(latest_metric_pe, "date"):
+                    latest_metric_pe = latest_metric_pe.date()
+                if (latest_quarterly_pe - latest_metric_pe).days > TTM_MAX_FLOW_STALENESS_DAYS:
+                    continue
+
+                ttm[metric_type] = float(metric_rows["value"].sum())
 
         # ── Stock metrics: latest quarterly snapshot ──────────────────
         stock_df = con.execute(

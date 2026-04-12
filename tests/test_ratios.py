@@ -22,12 +22,14 @@ from golden_helpers import (
     extract_ticker_rows,
 )
 from golden_ratios_aapl import AAPL_ANNUAL_GOLDEN_RATIOS, AAPL_QUARTERLY_GOLDEN_RATIOS
+from golden_ratios_amzn import AMZN_ANNUAL_GOLDEN_RATIOS, AMZN_QUARTERLY_GOLDEN_RATIOS
 from golden_ratios_nvda import NVDA_ANNUAL_GOLDEN_RATIOS, NVDA_QUARTERLY_GOLDEN_RATIOS
 from golden_ratios_unh import UNH_ANNUAL_GOLDEN_RATIOS, UNH_QUARTERLY_GOLDEN_RATIOS
 from golden_ratios_wmt import WMT_ANNUAL_GOLDEN_RATIOS, WMT_QUARTERLY_GOLDEN_RATIOS
 from golden_ratios_xom import XOM_ANNUAL_GOLDEN_RATIOS, XOM_QUARTERLY_GOLDEN_RATIOS
 
 from golden_ttm_ratios_aapl import AAPL_TTM_GOLDEN_RATIOS
+from golden_ttm_ratios_amzn import AMZN_TTM_GOLDEN_RATIOS
 from golden_ttm_ratios_nvda import NVDA_TTM_GOLDEN_RATIOS
 from golden_ttm_ratios_unh import UNH_TTM_GOLDEN_RATIOS
 from golden_ttm_ratios_wmt import WMT_TTM_GOLDEN_RATIOS
@@ -50,10 +52,11 @@ from investment_researcher.ratios import (
 ANNUAL_START_DATE = date(2022, 1, 1)
 DATE_TOLERANCE_DAYS = 7
 
-TICKERS = ["AAPL", "NVDA", "UNH", "WMT", "XOM"]
+TICKERS = ["AAPL", "AMZN", "NVDA", "UNH", "WMT", "XOM"]
 
 GOLDEN_DATA = {
     "AAPL": {"annual": AAPL_ANNUAL_GOLDEN_RATIOS, "quarterly": AAPL_QUARTERLY_GOLDEN_RATIOS},
+    "AMZN": {"annual": AMZN_ANNUAL_GOLDEN_RATIOS, "quarterly": AMZN_QUARTERLY_GOLDEN_RATIOS},
     "NVDA": {"annual": NVDA_ANNUAL_GOLDEN_RATIOS, "quarterly": NVDA_QUARTERLY_GOLDEN_RATIOS},
     "UNH": {"annual": UNH_ANNUAL_GOLDEN_RATIOS, "quarterly": UNH_QUARTERLY_GOLDEN_RATIOS},
     "WMT": {"annual": WMT_ANNUAL_GOLDEN_RATIOS, "quarterly": WMT_QUARTERLY_GOLDEN_RATIOS},
@@ -62,6 +65,7 @@ GOLDEN_DATA = {
 
 GOLDEN_TTM_DATA = {
     "AAPL": AAPL_TTM_GOLDEN_RATIOS,
+    "AMZN": AMZN_TTM_GOLDEN_RATIOS,
     "NVDA": NVDA_TTM_GOLDEN_RATIOS,
     "UNH": UNH_TTM_GOLDEN_RATIOS,
     "WMT": WMT_TTM_GOLDEN_RATIOS,

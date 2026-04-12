@@ -12,6 +12,7 @@ import importlib
 import os
 import tempfile
 
+import pandas as pd
 import pytest
 
 os.environ.setdefault("EDGAR_IDENTITY", "test@example.com")
@@ -22,18 +23,19 @@ from golden_helpers import GoldenTTMMetric, assert_ttm_metric_close
 
 from investment_researcher.ingestion.edgar.financials import extract_company_facts
 from investment_researcher.ingestion.state import initialize_state_db
-from investment_researcher.ingestion.timeseries import initialize_db
+from investment_researcher.ingestion.timeseries import initialize_db, write_financial_metrics
 from investment_researcher.metrics import compute_ttm_metrics
 
 
 # ── Try importing golden TTM data ────────────────────────────────────────────
 
-TICKERS = ["AAPL", "NVDA", "UNH", "WMT", "XOM"]
+TICKERS = ["AAPL", "AMZN", "NVDA", "UNH", "WMT", "XOM"]
 
 GOLDEN_TTM_DATA: dict[str, list[GoldenTTMMetric]] = {}
 
 _TTM_GOLDEN_MODULES = {
     "AAPL": ("tests.fixtures.golden_ttm_aapl", "AAPL_TTM_GOLDEN"),
+    "AMZN": ("tests.fixtures.golden_ttm_amzn", "AMZN_TTM_GOLDEN"),
     "NVDA": ("tests.fixtures.golden_ttm_nvda", "NVDA_TTM_GOLDEN"),
     "UNH": ("tests.fixtures.golden_ttm_unh", "UNH_TTM_GOLDEN"),
     "WMT": ("tests.fixtures.golden_ttm_wmt", "WMT_TTM_GOLDEN"),
@@ -127,3 +129,105 @@ def test_ttm_metrics_no_crash(ttm_db_paths):
     for ticker, db_path in ttm_db_paths.items():
         result = compute_ttm_metrics(ticker, db_path=db_path)
         assert isinstance(result, dict)
+
+
+def test_ttm_metrics_excludes_stale_flow_series(tmp_path):
+    db_path = tmp_path / "stale_ttm.duckdb"
+    initialize_db(db_path=str(db_path))
+
+    rows = pd.DataFrame([
+        {
+            "ticker": "TEST",
+            "metric_type": "revenue",
+            "value": 100.0,
+            "currency": "USD",
+            "period": "Quarter Ended 03/31/2025",
+            "period_type": "quarterly",
+            "period_end": "2025-03-31",
+            "source": "test",
+            "accession": "",
+        },
+        {
+            "ticker": "TEST",
+            "metric_type": "revenue",
+            "value": 110.0,
+            "currency": "USD",
+            "period": "Quarter Ended 06/30/2025",
+            "period_type": "quarterly",
+            "period_end": "2025-06-30",
+            "source": "test",
+            "accession": "",
+        },
+        {
+            "ticker": "TEST",
+            "metric_type": "revenue",
+            "value": 120.0,
+            "currency": "USD",
+            "period": "Quarter Ended 09/30/2025",
+            "period_type": "quarterly",
+            "period_end": "2025-09-30",
+            "source": "test",
+            "accession": "",
+        },
+        {
+            "ticker": "TEST",
+            "metric_type": "revenue",
+            "value": 130.0,
+            "currency": "USD",
+            "period": "Quarter Ended 12/31/2025",
+            "period_type": "quarterly",
+            "period_end": "2025-12-31",
+            "source": "test",
+            "accession": "",
+        },
+        {
+            "ticker": "TEST",
+            "metric_type": "gross_profit",
+            "value": 10.0,
+            "currency": "USD",
+            "period": "Quarter Ended 03/31/2020",
+            "period_type": "quarterly",
+            "period_end": "2020-03-31",
+            "source": "test",
+            "accession": "",
+        },
+        {
+            "ticker": "TEST",
+            "metric_type": "gross_profit",
+            "value": 11.0,
+            "currency": "USD",
+            "period": "Quarter Ended 06/30/2020",
+            "period_type": "quarterly",
+            "period_end": "2020-06-30",
+            "source": "test",
+            "accession": "",
+        },
+        {
+            "ticker": "TEST",
+            "metric_type": "gross_profit",
+            "value": 12.0,
+            "currency": "USD",
+            "period": "Quarter Ended 09/30/2020",
+            "period_type": "quarterly",
+            "period_end": "2020-09-30",
+            "source": "test",
+            "accession": "",
+        },
+        {
+            "ticker": "TEST",
+            "metric_type": "gross_profit",
+            "value": 13.0,
+            "currency": "USD",
+            "period": "Quarter Ended 12/31/2020",
+            "period_type": "quarterly",
+            "period_end": "2020-12-31",
+            "source": "test",
+            "accession": "",
+        },
+    ])
+    write_financial_metrics(rows, db_path=str(db_path))
+
+    metrics = compute_ttm_metrics("TEST", db_path=str(db_path))
+
+    assert metrics["revenue"] == 460.0
+    assert "gross_profit" not in metrics

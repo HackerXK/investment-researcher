@@ -21,7 +21,11 @@ from datetime import date
 import pandas as pd
 
 from investment_researcher.ingestion.state import update_company_extraction
-from investment_researcher.ingestion.timeseries import write_financial_metrics
+from investment_researcher.ingestion.timeseries import (
+    delete_company_financial_metrics,
+    write_financial_metrics,
+)
+from investment_researcher.ingestion.state import delete_company_extraction_state
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +43,8 @@ FLOW_METRICS: set[str] = {
     "operating_cash_flow", "investing_cash_flow", "financing_cash_flow",
     "capex", "dividends_paid",
 }
+
+FLOW_DERIVED_GROSS_PROFIT_COGS_RATIO_RANGE = (0.2, 0.95)
 
 STOCK_METRICS: set[str] = {
     "total_assets", "total_liabilities", "stockholders_equity", "cash",
@@ -219,12 +225,145 @@ def _make_row(
     }
 
 
+def _metric_row_value(metric_rows: dict[str, dict], metric_type: str) -> float | None:
+    """Return a numeric row value from a period metric index, if present."""
+    row = metric_rows.get(metric_type)
+    if not row:
+        return None
+    val = row.get("value")
+    if val is None or pd.isna(val):
+        return None
+    return float(val)
+
+
+def _derive_missing_flow_rows(df: pd.DataFrame) -> pd.DataFrame:
+    """Backfill sparse flow metrics from adjacent extracted line items.
+
+    Some filers do not expose recent companyfacts rows for `gross_profit` or
+    `operating_expenses` even though the filing still reports the required
+    inputs. Derive only the missing rows and persist them during extraction so
+    downstream queries and charts see complete income statement coverage.
+    """
+    if df.empty:
+        return df.iloc[0:0].copy()
+
+    derived_rows: list[dict] = []
+
+    for _, period_df in df.groupby(["ticker", "period_type", "period_end"], sort=False):
+        metric_rows = {
+            row["metric_type"]: row
+            for row in period_df.to_dict("records")
+        }
+        period_type = period_df["period_type"].iloc[0]
+        period_end = _to_date(period_df["period_end"].iloc[0])
+        if period_end is None:
+            continue
+
+        ticker = period_df["ticker"].iloc[0]
+        cik_series = period_df["cik"].dropna() if "cik" in period_df.columns else pd.Series(dtype=object)
+        cik = str(cik_series.iloc[0]) if not cik_series.empty else None
+
+        accession = None
+        if "accession" in period_df.columns:
+            accessions = sorted({
+                str(a) for a in period_df["accession"]
+                if a is not None and not pd.isna(a) and str(a)
+            })
+            if len(accessions) == 1:
+                accession = accessions[0]
+
+        source_values = []
+        if "source" in period_df.columns:
+            source_values = sorted({
+                str(s) for s in period_df["source"]
+                if s is not None and not pd.isna(s) and str(s)
+            })
+
+        if len(source_values) == 1 and not source_values[0].endswith("-derived"):
+            derived_source = f"{source_values[0]}-derived"
+        else:
+            derived_source = "10-K-derived" if period_type == "annual" else "10-Q-derived"
+
+        gross_profit = _metric_row_value(metric_rows, "gross_profit")
+        if gross_profit is None:
+            revenue = _metric_row_value(metric_rows, "revenue")
+            cost_of_revenue = _metric_row_value(metric_rows, "cost_of_revenue")
+            if revenue not in (None, 0) and cost_of_revenue is not None:
+                cogs_ratio = abs(cost_of_revenue / revenue)
+                min_ratio, max_ratio = FLOW_DERIVED_GROSS_PROFIT_COGS_RATIO_RANGE
+                if min_ratio <= cogs_ratio <= max_ratio:
+                    gross_profit = revenue - cost_of_revenue
+                    derived_rows.append(_make_row(
+                        ticker,
+                        cik,
+                        "gross_profit",
+                        gross_profit,
+                        period_end,
+                        period_type,
+                        derived_source,
+                        accession,
+                    ))
+                    metric_rows["gross_profit"] = {"value": gross_profit}
+
+        if _metric_row_value(metric_rows, "operating_expenses") is None:
+            operating_income = _metric_row_value(metric_rows, "operating_income")
+            if gross_profit is not None and operating_income is not None:
+                operating_expenses = gross_profit - operating_income
+                if operating_expenses >= 0:
+                    derived_rows.append(_make_row(
+                        ticker,
+                        cik,
+                        "operating_expenses",
+                        operating_expenses,
+                        period_end,
+                        period_type,
+                        derived_source,
+                        accession,
+                    ))
+
+    if not derived_rows:
+        return df.iloc[0:0].copy()
+
+    return pd.DataFrame(derived_rows)
+
+
 def _dedup_period_end(df: pd.DataFrame) -> pd.DataFrame:
     """Deduplicate rows by period_end, keeping the max numeric_value."""
     agg_cols: dict[str, str] = {"numeric_value": "max"}
     if "fiscal_year" in df.columns:
         agg_cols["fiscal_year"] = "first"
     return df.groupby("period_end", as_index=False).agg(agg_cols)
+
+
+def _select_annual_flow_rows(df: pd.DataFrame) -> pd.DataFrame:
+    """Return only credible annual flow rows.
+
+    Some companyfacts series include noisy contexts where quarter or short-period
+    values are mislabeled as ``FY``, or 12-month rolling values are attached to
+    quarter fiscal periods. We only persist annual flow rows when they satisfy
+    the annual-duration check (when available) and are tagged as ``FY``.
+
+    Some time_series() frames also expose multiple FY-labelled rows for the same
+    period_end with conflicting fiscal_year labels. In that case, keep the row
+    selected by _dedup_period_end() for that period_end and ignore fiscal_year.
+    """
+    annual_df = df.copy()
+
+    if "_duration" not in annual_df.columns and {
+        "period_start", "period_end",
+    }.issubset(annual_df.columns):
+        annual_df["_duration"] = _vectorized_duration_bucket(
+            annual_df["period_start"], annual_df["period_end"],
+        )
+
+    if "_duration" in annual_df.columns:
+        annual_df = annual_df[annual_df["_duration"] == "annual"]
+    if "fiscal_period" in annual_df.columns:
+        annual_df = annual_df[annual_df["fiscal_period"] == "FY"]
+    if annual_df.empty:
+        return annual_df
+
+    return _dedup_period_end(annual_df)
 
 
 def _duration_bucket(period_start, period_end) -> str | None:
@@ -392,6 +531,15 @@ def extract_company_facts(
         keep="first",
     )
 
+    derived_df = _derive_missing_flow_rows(df)
+    if not derived_df.empty:
+        df = pd.concat([df, derived_df], ignore_index=True)
+        df = df.drop_duplicates(
+            subset=["ticker", "metric_type", "period_type", "period_end"],
+            keep="first",
+        )
+        logger.info("%s: derived %d fallback flow rows", ticker, len(derived_df))
+
     # Log per-metric coverage summary
     coverage = (
         df.groupby(["metric_type", "period_type"])
@@ -492,10 +640,9 @@ def _extract_flow_s1(
     try:
         ts = facts.time_series(concept_name)
         if ts is not None and len(ts) > 0 and "fiscal_period" in ts.columns:
-            fy_data = ts[ts["fiscal_period"] == "FY"].copy()
+            fy_data = _select_annual_flow_rows(ts)
             if not fy_data.empty:
-                deduped = _dedup_period_end(fy_data)
-                for _, row in deduped.iterrows():
+                for _, row in fy_data.iterrows():
                     pe = row["period_end"]
                     val = row["numeric_value"]
                     if pd.isna(pe) or pd.isna(val):
@@ -659,8 +806,9 @@ def _extract_flow_from_raw(
         ticker, metric_type, bucket_counts, unclassified,
     )
 
-    # Annual (FY) rows
-    fy_df = concept_df[concept_df["_duration"] == "annual"]
+    # Annual (FY) rows. Some filers expose rolling 12-month values on Q1/Q2/Q3
+    # contexts, so require a true FY label in addition to annual duration.
+    fy_df = _select_annual_flow_rows(concept_df)
     if not fy_df.empty:
         _emit_rows(fy_df, ticker, cik, metric_type, "annual", "FY", all_rows)
 
@@ -887,3 +1035,43 @@ def extract_all_companies(
         total_rows,
     )
     return companies_processed, total_rows
+
+
+def rerun_slow_path_for_companies(
+    tickers: list[str],
+    db_path: str | None = None,
+    state_db_path: str | None = None,
+) -> list[dict[str, int | str]]:
+    """Delete then re-extract slow-path data for the requested tickers.
+
+    This intentionally does not use upsert semantics for the selected companies.
+    Existing `financial_metrics` rows and company extraction state are deleted
+    first, then the slow-path extractor is re-run for each ticker.
+    """
+    from investment_researcher.ingestion.edgar.storage import configure_edgar
+
+    normalized = sorted({t.strip().upper() for t in tickers if t and t.strip()})
+    if not normalized:
+        return []
+
+    configure_edgar()
+
+    results: list[dict[str, int | str]] = []
+    for ticker in normalized:
+        deleted_rows = delete_company_financial_metrics(ticker, db_path=db_path)
+        deleted_state_rows = delete_company_extraction_state(ticker, db_path=state_db_path)
+        written_rows = extract_company_facts(
+            ticker,
+            db_path=db_path,
+            state_db_path=state_db_path,
+        )
+        results.append(
+            {
+                "ticker": ticker,
+                "deleted_rows": deleted_rows,
+                "deleted_state_rows": deleted_state_rows,
+                "written_rows": written_rows,
+            }
+        )
+
+    return results

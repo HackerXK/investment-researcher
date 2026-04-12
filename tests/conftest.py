@@ -13,8 +13,8 @@ Responsibilities
    * No test ever touches ``data/duckdb/financial_timeseries.duckdb``.
    * Every test session starts from a clean slate.
 
-3. Seed the session DuckDB with annual + quarterly data for all five golden
-   companies (AAPL, NVDA, UNH, WMT, XOM) so that the API / shape tests in
+3. Seed the session DuckDB with annual + quarterly data for all six golden
+    companies (AAPL, AMZN, NVDA, UNH, WMT, XOM) so that the API / shape tests in
    ``test_api.py`` pass without a live production database.
 """
 
@@ -62,6 +62,7 @@ def session_duckdb():
     # Import project modules *inside* the fixture so the module-level env vars
     # set above are already in place when config.py resolves DUCKDB_PATH_RUNTIME.
     from golden_aapl import AAPL_ANNUAL_GOLDEN, AAPL_QUARTERLY_GOLDEN
+    from golden_amzn import AMZN_ANNUAL_GOLDEN, AMZN_QUARTERLY_GOLDEN
     from golden_nvda import NVDA_ANNUAL_GOLDEN, NVDA_QUARTERLY_GOLDEN
     from golden_unh import UNH_ANNUAL_GOLDEN, UNH_QUARTERLY_GOLDEN
     from golden_wmt import WMT_ANNUAL_GOLDEN, WMT_QUARTERLY_GOLDEN
@@ -76,6 +77,7 @@ def session_duckdb():
 
     _COMPANY_CIKS = {
         "AAPL": "0000320193",
+        "AMZN": "0001018724",
         "NVDA": "0001045810",
         "UNH": "0000731766",
         "WMT": "0000104169",
@@ -84,6 +86,7 @@ def session_duckdb():
 
     golden_map = {
         "AAPL": (AAPL_ANNUAL_GOLDEN, AAPL_QUARTERLY_GOLDEN),
+        "AMZN": (AMZN_ANNUAL_GOLDEN, AMZN_QUARTERLY_GOLDEN),
         "NVDA": (NVDA_ANNUAL_GOLDEN, NVDA_QUARTERLY_GOLDEN),
         "UNH": (UNH_ANNUAL_GOLDEN, UNH_QUARTERLY_GOLDEN),
         "WMT": (WMT_ANNUAL_GOLDEN, WMT_QUARTERLY_GOLDEN),

@@ -3,6 +3,7 @@
 
 Usage:
     FMP_API_KEY=your_key python scripts/build_golden_ratios.py
+    FMP_API_KEY=your_key python scripts/build_golden_ratios.py AMZN
 
 Fetches from:
   - /api/v3/ratios/{symbol}?period=annual
@@ -10,7 +11,7 @@ Fetches from:
   - /api/v3/key-metrics/{symbol}?period=annual
   - /api/v3/key-metrics/{symbol}?period=quarter
 
-Outputs tests/golden_ratios_{ticker}.py for each ticker.
+Outputs tests/fixtures/golden_ratios_{ticker}.py for each ticker.
 """
 
 import json
@@ -24,7 +25,7 @@ import requests
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-TICKERS = ["AAPL", "NVDA", "UNH", "WMT", "XOM"]
+TICKERS = ["AAPL", "AMZN", "NVDA", "UNH", "WMT", "XOM"]
 
 # Minimum fiscal year to include (we need matching SEC data)
 MIN_YEAR = 2021
@@ -93,6 +94,8 @@ DOLLAR_RATIOS = {"working_capital", "net_debt"}
 # Known-bad FMP datapoints with obvious data gaps / zero values that should not
 # be used as golden truth.
 EXCLUDED_GOLDEN_POINTS = {
+    ("AMZN", "ebitda_margin", "annual", date(2022, 12, 31)),
+    ("AMZN", "ebitda_margin", "annual", date(2025, 12, 31)),
     ("WMT", "capital_expenditure_coverage_ratio", "annual", date(2026, 1, 31)),
     ("WMT", "dividend_paid_and_capex_coverage_ratio", "annual", date(2026, 1, 31)),
     ("WMT", "free_cash_flow_to_operating_cash_flow_ratio", "annual", date(2026, 1, 31)),
@@ -224,9 +227,15 @@ def main():
         print("ERROR: Set FMP_API_KEY environment variable", file=sys.stderr)
         sys.exit(1)
 
-    outdir = PROJECT_ROOT / "tests"
+    outdir = PROJECT_ROOT / "tests" / "fixtures"
 
-    for ticker in TICKERS:
+    tickers = [t.upper() for t in sys.argv[1:]] if len(sys.argv) > 1 else TICKERS
+    unknown = sorted(set(tickers) - set(TICKERS))
+    if unknown:
+        print(f"ERROR: Unknown ticker(s): {', '.join(unknown)}", file=sys.stderr)
+        sys.exit(1)
+
+    for ticker in tickers:
         print(f"\n{'='*60}")
         print(f"Fetching {ticker}...")
         all_entries: list[dict] = []

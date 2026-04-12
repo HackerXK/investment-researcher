@@ -57,6 +57,23 @@ const marginChart = computed(() => {
 
   return lineChart(periods.value, series, { ySuffix: '%' })
 })
+
+const marginEmptyMessage = computed(() => {
+  if (!pivot.value || marginChart.value) return null
+
+  const rev = colData('revenue')
+  if (!rev.length) {
+    return 'Revenue is unavailable for the selected period.'
+  }
+
+  const marginMetrics = ['gross_profit', 'operating_income', 'net_income']
+  const availableMetrics = marginMetrics.filter(metric => metrics.value.includes(metric))
+  if (!availableMetrics.length) {
+    return 'Margin inputs are unavailable for the selected period.'
+  }
+
+  return 'Margin data is too sparse for the selected period.'
+})
 </script>
 
 <template>
@@ -71,12 +88,18 @@ const marginChart = computed(() => {
           <EChart :option="revenueChart" autoresize class="h-72" />
         </CardContent>
       </Card>
-      <Card v-if="marginChart">
+      <Card v-if="pivot && pivot.columns.length > 0">
         <CardHeader class="pb-2">
           <CardTitle class="text-base">Margin Trends</CardTitle>
         </CardHeader>
         <CardContent>
-          <EChart :option="marginChart" autoresize class="h-72" />
+          <EChart v-if="marginChart" :option="marginChart" autoresize class="h-72" />
+          <div
+            v-else
+            class="h-72 flex items-center justify-center text-center text-sm text-muted-foreground"
+          >
+            {{ marginEmptyMessage }}
+          </div>
         </CardContent>
       </Card>
     </div>

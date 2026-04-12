@@ -3,6 +3,7 @@
 import pytest
 
 from investment_researcher.ingestion.state import (
+    delete_company_extraction_state,
     get_company_extraction_count,
     get_connection,
     get_company_last_extracted,
@@ -63,6 +64,16 @@ class TestCompanyExtractionState:
         ts2 = get_company_last_extracted("AAPL", db_path=state_db)
         assert ts2 >= ts1
         assert get_company_extraction_count(db_path=state_db) == 1
+
+    def test_delete_company_state(self, state_db):
+        update_company_extraction("AAPL", db_path=state_db)
+        update_company_extraction("MSFT", db_path=state_db)
+
+        deleted = delete_company_extraction_state(["aapl"], db_path=state_db)
+
+        assert deleted == 1
+        assert get_company_last_extracted("AAPL", db_path=state_db) is None
+        assert get_company_last_extracted("MSFT", db_path=state_db) is not None
 
 
 class TestProcessedFilings:

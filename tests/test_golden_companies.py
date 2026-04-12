@@ -6,6 +6,7 @@ from datetime import date
 import pytest
 
 from golden_aapl import AAPL_ANNUAL_GOLDEN, AAPL_QUARTERLY_GOLDEN
+from golden_amzn import AMZN_ANNUAL_GOLDEN, AMZN_QUARTERLY_GOLDEN
 from golden_helpers import GoldenMetric, assert_value_close, extract_ticker_rows, find_match
 from golden_nvda import NVDA_ANNUAL_GOLDEN, NVDA_QUARTERLY_GOLDEN
 from golden_unh import UNH_ANNUAL_GOLDEN, UNH_QUARTERLY_GOLDEN
@@ -38,6 +39,12 @@ COMPANY_CASES = (
         ticker="AAPL",
         annual_metrics=tuple(AAPL_ANNUAL_GOLDEN),
         quarterly_metrics=tuple(AAPL_QUARTERLY_GOLDEN),
+    ),
+    GoldenCompanyCase(
+        ticker="AMZN",
+        annual_metrics=tuple(AMZN_ANNUAL_GOLDEN),
+        quarterly_metrics=tuple(AMZN_QUARTERLY_GOLDEN),
+        require_net_income_bound=False,
     ),
     GoldenCompanyCase(
         ticker="NVDA",

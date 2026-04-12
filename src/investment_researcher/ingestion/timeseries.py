@@ -10,7 +10,7 @@ from pathlib import Path
 import duckdb
 import pandas as pd
 
-from investment_researcher.config import DUCKDB_PATH_RUNTIME as DUCKDB_PATH
+from investment_researcher.config import DUCKDB_PATH_RUNTIME
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ CREATE TABLE IF NOT EXISTS macro_timeseries (
 
 def get_connection(db_path: str | None = None) -> duckdb.DuckDBPyConnection:
     """Get a DuckDB connection, creating the database file if needed."""
-    path = db_path or DUCKDB_PATH
+    path = db_path or DUCKDB_PATH_RUNTIME
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     return duckdb.connect(path)
 
@@ -59,7 +59,7 @@ def initialize_db(db_path: str | None = None) -> None:
     try:
         con.execute(_CREATE_FINANCIAL_METRICS)
         con.execute(_CREATE_MACRO_TIMESERIES)
-        logger.info("DuckDB tables initialized at %s", db_path or DUCKDB_PATH)
+        logger.info("DuckDB tables initialized at %s", db_path or DUCKDB_PATH_RUNTIME)
     finally:
         con.close()
 
@@ -119,9 +119,40 @@ def write_financial_metrics(df: pd.DataFrame, db_path: str | None = None) -> int
         con.close()
 
 
+def delete_company_financial_metrics(
+    tickers: list[str] | tuple[str, ...] | str,
+    db_path: str | None = None,
+) -> int:
+    """Delete all financial metric rows for the requested ticker(s)."""
+    if isinstance(tickers, str):
+        ticker_list = [tickers]
+    else:
+        ticker_list = list(tickers)
+
+    normalized = sorted({t.strip().upper() for t in ticker_list if t and t.strip()})
+    if not normalized:
+        return 0
+
+    placeholders = ", ".join("?" for _ in normalized)
+    con = get_connection(db_path)
+    try:
+        delete_count = con.execute(
+            f"SELECT COUNT(*) FROM financial_metrics WHERE ticker IN ({placeholders})",
+            normalized,
+        ).fetchone()[0]
+        con.execute(
+            f"DELETE FROM financial_metrics WHERE ticker IN ({placeholders})",
+            normalized,
+        )
+        logger.info("Deleted %d financial_metrics rows for tickers=%s", delete_count, normalized)
+        return delete_count
+    finally:
+        con.close()
+
+
 def is_db_empty(db_path: str | None = None) -> bool:
     """Check if the financial_metrics table is empty or doesn't exist."""
-    path = db_path or DUCKDB_PATH
+    path = db_path or DUCKDB_PATH_RUNTIME
     if not Path(path).exists():
         return True
     con = get_connection(db_path)

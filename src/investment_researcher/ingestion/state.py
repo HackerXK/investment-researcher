@@ -76,6 +76,37 @@ def update_company_extraction(
         conn.close()
 
 
+def delete_company_extraction_state(
+    tickers: list[str] | tuple[str, ...] | str,
+    db_path: str | None = None,
+) -> int:
+    """Delete company extraction state rows for the requested ticker(s)."""
+    if isinstance(tickers, str):
+        ticker_list = [tickers]
+    else:
+        ticker_list = list(tickers)
+
+    normalized = sorted({t.strip().upper() for t in ticker_list if t and t.strip()})
+    if not normalized:
+        return 0
+
+    placeholders = ", ".join("?" for _ in normalized)
+    conn = get_connection(db_path)
+    try:
+        delete_count = conn.execute(
+            f"SELECT COUNT(*) FROM company_extraction_state WHERE ticker IN ({placeholders})",
+            normalized,
+        ).fetchone()[0]
+        conn.execute(
+            f"DELETE FROM company_extraction_state WHERE ticker IN ({placeholders})",
+            normalized,
+        )
+        conn.commit()
+        return delete_count
+    finally:
+        conn.close()
+
+
 def get_company_last_extracted(ticker: str, db_path: str | None = None) -> str | None:
     """Get the last extraction timestamp for a company."""
     conn = get_connection(db_path)

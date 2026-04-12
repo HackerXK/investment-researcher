@@ -32,6 +32,9 @@ from investment_researcher.analytics import (
     ticker_summary,
     ttm_metrics,
 )
+from investment_researcher.ingestion.edgar.financials import rerun_slow_path_for_companies
+from investment_researcher.ingestion.state import initialize_state_db
+from investment_researcher.ingestion.timeseries import initialize_db
 from investment_researcher.web.chat import ChatRequest, handle_chat
 
 # ---------------------------------------------------------------------------
@@ -89,6 +92,10 @@ def _df_to_wide(df: pd.DataFrame) -> dict[str, Any]:
     cols = list(df.columns)
     data = _sanitize(df.values.tolist())
     return {"index": idx, "columns": cols, "data": data}
+
+
+class SlowPathRerunRequest(BaseModel):
+    tickers: list[str]
 
 
 # ---------------------------------------------------------------------------
@@ -273,6 +280,25 @@ def api_filing_text(ticker: str, accession: str):
     if not text:
         raise HTTPException(404, "Filing not found")
     return {"accession_number": accession, "text": text}
+
+
+@app.post("/api/companies/slow-path/rerun")
+def api_rerun_slow_path(request: SlowPathRerunRequest):
+    tickers = [t.strip().upper() for t in request.tickers if t and t.strip()]
+    if not tickers:
+        raise HTTPException(400, "At least one ticker is required")
+
+    initialize_db()
+    initialize_state_db()
+    results = rerun_slow_path_for_companies(tickers)
+    return _sanitize(
+        {
+            "results": results,
+            "tickers": [r["ticker"] for r in results],
+            "total_deleted_rows": sum(int(r["deleted_rows"]) for r in results),
+            "total_written_rows": sum(int(r["written_rows"]) for r in results),
+        }
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -59,6 +59,24 @@ const marginsChart = computed(() => {
   return lineChart(periods, series, { ySuffix: '%', smooth: true })
 })
 
+const marginsEmptyMessage = computed(() => {
+  const mp = props.data.margins_pivot
+  if (!mp || marginsChart.value) return null
+
+  const revCI = mp.columns.indexOf('revenue')
+  if (revCI < 0) {
+    return 'Revenue is unavailable for the selected period.'
+  }
+
+  const availableMetrics = ['gross_profit', 'operating_income', 'net_income']
+    .filter(metric => mp.columns.includes(metric))
+  if (!availableMetrics.length) {
+    return 'Margin inputs are unavailable for the selected period.'
+  }
+
+  return 'Margin data is too sparse for the selected period.'
+})
+
 // Earnings quality: Net Income vs Operating Cash Flow (index=periods, columns=metrics)
 const earningsChart = computed(() => {
   const eq = props.data.earnings_quality
@@ -91,12 +109,18 @@ const earningsChart = computed(() => {
           <EChart :option="growthChart" autoresize class="h-72" />
         </CardContent>
       </Card>
-      <Card v-if="marginsChart">
+      <Card v-if="data.margins_pivot && data.margins_pivot.columns.length > 0">
         <CardHeader class="pb-2">
           <CardTitle class="text-base">Margin Trends</CardTitle>
         </CardHeader>
         <CardContent>
-          <EChart :option="marginsChart" autoresize class="h-72" />
+          <EChart v-if="marginsChart" :option="marginsChart" autoresize class="h-72" />
+          <div
+            v-else
+            class="h-72 flex items-center justify-center text-center text-sm text-muted-foreground"
+          >
+            {{ marginsEmptyMessage }}
+          </div>
         </CardContent>
       </Card>
     </div>

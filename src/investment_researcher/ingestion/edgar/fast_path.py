@@ -16,6 +16,7 @@ from investment_researcher.config import RAW_FILING_TICKERS
 from investment_researcher.ingestion.edgar.financials import (
     FLOW_METRICS,
     RAW_CONCEPT_MAP,
+    _derive_missing_flow_rows,
     _dedup_period_end,
     _duration_bucket,
     _make_row,
@@ -244,6 +245,15 @@ def _extract_metrics_from_filing(
         subset=["ticker", "metric_type", "period_type", "period_end"],
         keep="first",
     )
+
+    derived_df = _derive_missing_flow_rows(result)
+    if not derived_df.empty:
+        result = pd.concat([result, derived_df], ignore_index=True)
+        result = result.drop_duplicates(
+            subset=["ticker", "metric_type", "period_type", "period_end"],
+            keep="first",
+        )
+
     return result
 
 
