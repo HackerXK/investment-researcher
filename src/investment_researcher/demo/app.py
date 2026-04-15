@@ -566,7 +566,7 @@ with tab_cash:
         if not fcf_data.empty:
             fcf_piv = fcf_data.pivot(index="period_end", columns="metric_type", values="value").sort_index()
             if "operating_cash_flow" in fcf_piv.columns and "capex" in fcf_piv.columns:
-                fcf_piv["free_cash_flow"] = fcf_piv["operating_cash_flow"] - fcf_piv["capex"]
+                fcf_piv["free_cash_flow"] = fcf_piv["operating_cash_flow"] + fcf_piv["capex"]
                 fcf_df = fcf_piv.reset_index()[["period_end", "free_cash_flow"]].dropna()
                 fig = px.bar(
                     fcf_df,

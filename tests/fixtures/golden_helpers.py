@@ -12,6 +12,7 @@ import edgar
 from investment_researcher.ingestion.edgar.financials import (
     extract_company_facts,
 )
+from investment_researcher.signs import normalize_extracted_metric_value
 from investment_researcher.ingestion.timeseries import get_connection, initialize_db
 from investment_researcher.ingestion.state import initialize_state_db
 
@@ -96,7 +97,7 @@ def find_match(
 
 def assert_value_close(actual: float, golden, label: str):
     """Assert that actual value is within tolerance of golden value."""
-    expected = golden.value
+    expected = normalize_extracted_metric_value(golden.metric_type, golden.value)
     if golden.metric_type == "eps_diluted":
         assert abs(actual - expected) <= golden.tolerance_pct, (
             f"{label}: EPS {actual} vs golden {expected}, "

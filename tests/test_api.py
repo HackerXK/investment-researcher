@@ -82,6 +82,25 @@ async def test_income_pivot_shape(client: AsyncClient):
 
 
 @pytest.mark.asyncio
+async def test_cashflow_includes_derived_free_cash_flow(client: AsyncClient):
+    resp = await client.get("/api/companies/AAPL/financials", params={"tab": "cashflow"})
+    assert resp.status_code == 200
+
+    data = resp.json()
+    pivot = data["pivot"]
+    assert "free_cash_flow" in pivot["columns"]
+
+    latest_row = pivot["data"][-1]
+    latest = dict(zip(pivot["columns"], latest_row))
+    assert latest["capex"] < 0
+    assert latest["free_cash_flow"] == latest["operating_cash_flow"] + latest["capex"]
+    assert latest["free_cash_flow"] < latest["operating_cash_flow"]
+
+    metric_names = {record["metric_type"] for record in data["timeseries"]}
+    assert "free_cash_flow" in metric_names
+
+
+@pytest.mark.asyncio
 async def test_growth_shape(client: AsyncClient):
     resp = await client.get("/api/companies/AAPL/financials", params={"tab": "growth"})
     data = resp.json()

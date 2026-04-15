@@ -270,9 +270,9 @@ class TestSlowPathExtraction:
             ).fetchall()
 
         assert rows == [
-            ("cost_of_revenue", 620.0, "10-K"),
+            ("cost_of_revenue", -620.0, "10-K"),
             ("gross_profit", 380.0, "10-K-derived"),
-            ("operating_expenses", 200.0, "10-K-derived"),
+            ("operating_expenses", -200.0, "10-K-derived"),
             ("operating_income", 180.0, "10-K"),
             ("revenue", 1000.0, "10-K"),
         ]
@@ -377,9 +377,9 @@ class TestFastPathExtraction:
             df[["metric_type", "value", "source", "accession"]].itertuples(index=False, name=None)
         )
         assert rows == [
-            ("cost_of_revenue", 620.0, "10-K", "0001018724-24-000001"),
+            ("cost_of_revenue", -620.0, "10-K", "0001018724-24-000001"),
             ("gross_profit", 380.0, "10-K-derived", "0001018724-24-000001"),
-            ("operating_expenses", 200.0, "10-K-derived", "0001018724-24-000001"),
+            ("operating_expenses", -200.0, "10-K-derived", "0001018724-24-000001"),
             ("operating_income", 180.0, "10-K", "0001018724-24-000001"),
             ("revenue", 1000.0, "10-K", "0001018724-24-000001"),
         ]

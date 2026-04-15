@@ -21,6 +21,7 @@ from datetime import date
 import pandas as pd
 
 from investment_researcher.ingestion.state import update_company_extraction
+from investment_researcher.signs import normalize_extracted_metric_value
 from investment_researcher.ingestion.timeseries import (
     delete_company_financial_metrics,
     write_financial_metrics,
@@ -215,7 +216,7 @@ def _make_row(
         "ticker": ticker,
         "cik": cik,
         "metric_type": metric_type,
-        "value": value,
+        "value": normalize_extracted_metric_value(metric_type, value),
         "currency": "USD",
         "period": _make_period_label(period_end, period_type),
         "period_type": period_type,
@@ -292,7 +293,7 @@ def _derive_missing_flow_rows(df: pd.DataFrame) -> pd.DataFrame:
                 cogs_ratio = abs(cost_of_revenue / revenue)
                 min_ratio, max_ratio = FLOW_DERIVED_GROSS_PROFIT_COGS_RATIO_RANGE
                 if min_ratio <= cogs_ratio <= max_ratio:
-                    gross_profit = revenue - cost_of_revenue
+                    gross_profit = revenue + cost_of_revenue
                     derived_rows.append(_make_row(
                         ticker,
                         cik,
@@ -308,8 +309,8 @@ def _derive_missing_flow_rows(df: pd.DataFrame) -> pd.DataFrame:
         if _metric_row_value(metric_rows, "operating_expenses") is None:
             operating_income = _metric_row_value(metric_rows, "operating_income")
             if gross_profit is not None and operating_income is not None:
-                operating_expenses = gross_profit - operating_income
-                if operating_expenses >= 0:
+                operating_expenses = operating_income - gross_profit
+                if operating_expenses <= 0:
                     derived_rows.append(_make_row(
                         ticker,
                         cik,

@@ -1,8 +1,9 @@
-"""DuckDB writer — initializes and writes to the financial_metrics table.
+"""DuckDB writer — initializes, repairs, and writes to the financial_metrics table.
 
 Schema follows 02-graph-schema.md § Time Series Data Store exactly.
 """
 
+import json
 import logging
 from datetime import date as _date
 from pathlib import Path
@@ -11,6 +12,11 @@ import duckdb
 import pandas as pd
 
 from investment_researcher.config import DUCKDB_PATH_RUNTIME
+from investment_researcher.signs import (
+    NEGATIVE_MAGNITUDE_METRICS,
+    POSITIVE_MAGNITUDE_METRICS,
+    SIGN_FLIP_METRICS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +51,32 @@ CREATE TABLE IF NOT EXISTS macro_timeseries (
 );
 """
 
+_CREATE_DB_MAINTENANCE_RUNS = """
+CREATE TABLE IF NOT EXISTS db_maintenance_runs (
+    name         VARCHAR PRIMARY KEY,
+    ran_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    details_json VARCHAR
+);
+"""
+
+_SIGN_NORMALIZATION_MAINTENANCE = "normalize_financial_metric_signs_v1"
+
+
+def _ensure_maintenance_tables(con: duckdb.DuckDBPyConnection) -> None:
+    con.execute(_CREATE_DB_MAINTENANCE_RUNS)
+
+
+def _has_db_maintenance_run(
+    con: duckdb.DuckDBPyConnection,
+    name: str,
+) -> bool:
+    _ensure_maintenance_tables(con)
+    row = con.execute(
+        "SELECT 1 FROM db_maintenance_runs WHERE name = ?",
+        [name],
+    ).fetchone()
+    return row is not None
+
 
 def get_connection(db_path: str | None = None) -> duckdb.DuckDBPyConnection:
     """Get a DuckDB connection, creating the database file if needed."""
@@ -59,7 +91,111 @@ def initialize_db(db_path: str | None = None) -> None:
     try:
         con.execute(_CREATE_FINANCIAL_METRICS)
         con.execute(_CREATE_MACRO_TIMESERIES)
+        _ensure_maintenance_tables(con)
         logger.info("DuckDB tables initialized at %s", db_path or DUCKDB_PATH_RUNTIME)
+    finally:
+        con.close()
+
+
+def normalize_financial_metric_signs(
+    db_path: str | None = None,
+    dry_run: bool = False,
+    allow_rerun: bool = False,
+) -> dict[str, object]:
+    """Rewrite stored financial metrics into the repo's canonical sign convention.
+
+    This is primarily intended as a one-time migration for databases populated
+    before sign normalization moved into the ingestion boundary.
+    """
+    metric_rules: list[tuple[str, str, str, str]] = []
+    metric_rules.extend(
+        (metric_type, "negative_magnitude", "value > 0", "value = -ABS(value)")
+        for metric_type in sorted(NEGATIVE_MAGNITUDE_METRICS)
+    )
+    metric_rules.extend(
+        (metric_type, "positive_magnitude", "value < 0", "value = ABS(value)")
+        for metric_type in sorted(POSITIVE_MAGNITUDE_METRICS)
+    )
+    metric_rules.extend(
+        (metric_type, "sign_flip", "value <> 0", "value = -value")
+        for metric_type in sorted(SIGN_FLIP_METRICS)
+    )
+
+    con = get_connection(db_path)
+    try:
+        con.execute(_CREATE_FINANCIAL_METRICS)
+        _ensure_maintenance_tables(con)
+
+        already_applied = _has_db_maintenance_run(con, _SIGN_NORMALIZATION_MAINTENANCE)
+        if already_applied and not allow_rerun:
+            if dry_run:
+                return {
+                    "dry_run": True,
+                    "already_applied": True,
+                    "maintenance_name": _SIGN_NORMALIZATION_MAINTENANCE,
+                    "rows_changed": 0,
+                    "by_rule": {
+                        "negative_magnitude": 0,
+                        "positive_magnitude": 0,
+                        "sign_flip": 0,
+                    },
+                    "by_metric_type": [],
+                }
+            raise ValueError(
+                "Financial metric sign normalization has already been applied to this database. "
+                "Use --force only if you intentionally want to rerun the migration."
+            )
+
+        metric_summaries: list[dict[str, object]] = []
+        by_rule = {
+            "negative_magnitude": 0,
+            "positive_magnitude": 0,
+            "sign_flip": 0,
+        }
+
+        for metric_type, rule_name, predicate, assignment in metric_rules:
+            rows_changed = con.execute(
+                f"SELECT COUNT(*) FROM financial_metrics WHERE metric_type = ? AND {predicate}",
+                [metric_type],
+            ).fetchone()[0]
+            if not dry_run and rows_changed:
+                con.execute(
+                    f"UPDATE financial_metrics SET {assignment}, ingested_at = CURRENT_TIMESTAMP "
+                    f"WHERE metric_type = ? AND {predicate}",
+                    [metric_type],
+                )
+            metric_summaries.append(
+                {
+                    "metric_type": metric_type,
+                    "rule": rule_name,
+                    "rows_changed": int(rows_changed),
+                }
+            )
+            by_rule[rule_name] += int(rows_changed)
+
+        total_rows_changed = sum(item["rows_changed"] for item in metric_summaries)
+        payload = {
+            "dry_run": dry_run,
+            "already_applied": already_applied,
+            "maintenance_name": _SIGN_NORMALIZATION_MAINTENANCE,
+            "rows_changed": int(total_rows_changed),
+            "by_rule": by_rule,
+            "by_metric_type": [
+                item for item in metric_summaries if item["rows_changed"] > 0
+            ],
+        }
+
+        if dry_run:
+            return payload
+
+        con.execute(
+            """
+            INSERT OR REPLACE INTO db_maintenance_runs (name, ran_at, details_json)
+            VALUES (?, CURRENT_TIMESTAMP, ?)
+            """,
+            [_SIGN_NORMALIZATION_MAINTENANCE, json.dumps(payload, sort_keys=True)],
+        )
+        return payload
     finally:
         con.close()
 

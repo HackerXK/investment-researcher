@@ -22,18 +22,41 @@ TTM_MAX_FLOW_STALENESS_DAYS = 130
 # ── Math / lookup helpers ─────────────────────────────────────────────────────
 
 
+def _is_missing_number(value: float | None) -> bool:
+    return value is None or (isinstance(value, (float, np.floating)) and np.isnan(value))
+
+
 def _safe_div(a: float | None, b: float | None) -> float | None:
     """Return a / b, or None when inputs are missing or b == 0."""
-    if a is None or b is None or np.isnan(a) or np.isnan(b) or b == 0:
+    if _is_missing_number(a) or _is_missing_number(b) or b == 0:
         return None
     return a / b
 
 
 def _get(m: dict[str, float], key: str) -> float | None:
     v = m.get(key)
-    if v is None or (isinstance(v, float) and np.isnan(v)):
+    if _is_missing_number(v):
         return None
     return v
+
+
+def derive_free_cash_flow(
+    operating_cash_flow: float | None,
+    capex: float | None,
+    existing_free_cash_flow: float | None = None,
+) -> float | None:
+    """Return canonical free cash flow using the repo's sign convention.
+
+    The canonical DB stores ``capex`` as a negative cash outflow, so free cash
+    flow is ``operating_cash_flow + capex`` when both inputs are available.
+    If either component is missing, fall back to any existing free-cash-flow
+    value.
+    """
+    if not _is_missing_number(operating_cash_flow) and not _is_missing_number(capex):
+        return float(operating_cash_flow) + float(capex)
+    if _is_missing_number(existing_free_cash_flow):
+        return None
+    return float(existing_free_cash_flow)
 
 
 # ── Derived-metric enrichment ─────────────────────────────────────────────────
@@ -48,7 +71,7 @@ def _derive_ebitda(m: dict[str, float]) -> float | None:
     operating_income = _get(m, "operating_income")
     depreciation_and_amortization = _get(m, "depreciation_and_amortization")
     if operating_income is not None and depreciation_and_amortization is not None:
-        return operating_income + depreciation_and_amortization
+        return operating_income - depreciation_and_amortization
 
     net_income = _get(m, "net_income")
     income_tax_expense = _get(m, "income_tax_expense")
@@ -61,9 +84,9 @@ def _derive_ebitda(m: dict[str, float]) -> float | None:
     ):
         return (
             net_income
-            + income_tax_expense
-            + interest_expense
-            + depreciation_and_amortization
+            - income_tax_expense
+            - interest_expense
+            - depreciation_and_amortization
         )
 
     return None
@@ -85,15 +108,17 @@ def _with_derived_metrics(m: dict[str, float]) -> dict[str, float]:
     if derived_ebitda is not None:
         enriched["ebitda"] = derived_ebitda
 
-    # Derive free_cash_flow from operating cash flow and capex when filers do
-    # not expose a direct FCF concept in XBRL.
-    if _get(enriched, "free_cash_flow") is None:
-        operating_cash_flow = _get(enriched, "operating_cash_flow")
-        capex = _get(enriched, "capex")
-        if operating_cash_flow is not None and capex is not None:
-            enriched["free_cash_flow"] = operating_cash_flow - abs(capex)
+    # Canonicalize free_cash_flow using OCF + CapEx whenever the components are
+    # available. CapEx is stored as a negative cash outflow in the DB.
+    derived_free_cash_flow = derive_free_cash_flow(
+        _get(enriched, "operating_cash_flow"),
+        _get(enriched, "capex"),
+        _get(enriched, "free_cash_flow"),
+    )
+    if derived_free_cash_flow is not None:
+        enriched["free_cash_flow"] = derived_free_cash_flow
 
-    # Derive gross_profit from revenue - cost_of_revenue only when the implied
+    # Derive gross_profit from revenue + cost_of_revenue only when the implied
     # cost ratio looks like a real COGS signal. This avoids generating bogus
     # gross-margin values for sectors whose reported `cost_of_revenue` is only
     # a narrow subset of direct costs (for example some insurers).
@@ -103,15 +128,15 @@ def _with_derived_metrics(m: dict[str, float]) -> dict[str, float]:
         if revenue not in (None, 0) and cost_of_revenue is not None:
             cogs_ratio = abs(cost_of_revenue / revenue)
             if 0.2 <= cogs_ratio <= 0.95:
-                enriched["gross_profit"] = revenue - cost_of_revenue
+                enriched["gross_profit"] = revenue + cost_of_revenue
 
-    # Derive operating_income from gross_profit - operating_expenses when the
+    # Derive operating_income from gross_profit + operating_expenses when the
     # direct operating-income concept is absent but both components exist.
     if _get(enriched, "operating_income") is None:
         gross_profit = _get(enriched, "gross_profit")
         operating_expenses = _get(enriched, "operating_expenses")
         if gross_profit is not None and operating_expenses is not None:
-            enriched["operating_income"] = gross_profit - operating_expenses
+            enriched["operating_income"] = gross_profit + operating_expenses
 
     # Derive short_term_debt from commercial_paper + current portion of LTD
     # when not directly available (e.g. AAPL uses CommercialPaper + LongTermDebtCurrent)

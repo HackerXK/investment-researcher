@@ -19,7 +19,7 @@ import duckdb
 import numpy as np
 import pandas as pd
 
-from investment_researcher.config import DUCKDB_PATH_RUNTIME as DUCKDB_PATH
+from investment_researcher.config import DUCKDB_PATH_RUNTIME
 from investment_researcher.ingestion.edgar.financials import FLOW_METRICS
 from investment_researcher.metrics import (
     _get,
@@ -66,7 +66,7 @@ _r("operating_profit_margin", "Profitability Margins",
 _r("pretax_profit_margin", "Profitability Margins",
    ("net_income", "income_tax_expense", "revenue"),
    lambda m: _safe_div(
-       (_get(m, "net_income") or 0) + (_get(m, "income_tax_expense") or 0),
+       (_get(m, "net_income") or 0) - (_get(m, "income_tax_expense") or 0),
        _get(m, "revenue"),
    ) if _get(m, "net_income") is not None and _get(m, "income_tax_expense") is not None else None)
 
@@ -81,13 +81,14 @@ _r("ebitda_margin", "Profitability Margins",
 _r("effective_tax_rate", "Profitability Margins",
    ("income_tax_expense", "net_income"),
    lambda m: _safe_div(
-       _get(m, "income_tax_expense"),
-       (_get(m, "net_income") or 0) + (_get(m, "income_tax_expense") or 0),
+         -(_get(m, "income_tax_expense") or 0),
+         (_get(m, "net_income") or 0) - (_get(m, "income_tax_expense") or 0),
    ) if _get(m, "net_income") is not None and _get(m, "income_tax_expense") is not None else None)
 
 _r("research_and_development_to_revenue", "Profitability Margins",
    ("research_and_development", "revenue"),
-   lambda m: _safe_div(_get(m, "research_and_development"), _get(m, "revenue")))
+    lambda m: _safe_div(abs(_get(m, "research_and_development")), _get(m, "revenue"))
+    if _get(m, "research_and_development") is not None else None)
 
 # ── Returns (4) ──────────────────────────────────────────────────────────────
 
@@ -194,7 +195,8 @@ _r("asset_turnover", "Efficiency",
 
 _r("payables_turnover", "Efficiency",
    ("cost_of_revenue", "accounts_payable"),
-   lambda m: _safe_div(_get(m, "cost_of_revenue"), _get(m, "accounts_payable")),
+    lambda m: _safe_div(abs(_get(m, "cost_of_revenue")), _get(m, "accounts_payable"))
+    if _get(m, "cost_of_revenue") is not None else None,
    "multiple")
 
 # TODO: Re-enable inventory_turnover when sector-specific inventory
@@ -240,7 +242,8 @@ _r("dividend_paid_and_capex_coverage_ratio", "Cash Flow",
 
 _r("interest_coverage_ratio", "Cash Flow",
    ("operating_income", "interest_expense"),
-   lambda m: _safe_div(_get(m, "operating_income"), _get(m, "interest_expense")),
+    lambda m: _safe_div(_get(m, "operating_income"), abs(_get(m, "interest_expense")))
+    if _get(m, "interest_expense") is not None else None,
    "multiple")
 
 # ── Per Share (6) ─────────────────────────────────────────────────────────────
@@ -378,7 +381,7 @@ def _query_raw_metrics(
     db_path: str | None = None,
 ) -> pd.DataFrame:
     """Fetch raw metrics from DuckDB, pivoted as period_end × metric_type."""
-    path = db_path or DUCKDB_PATH
+    path = db_path or DUCKDB_PATH_RUNTIME
     con = duckdb.connect(path, read_only=True)
     try:
         needed = _required_metric_types()

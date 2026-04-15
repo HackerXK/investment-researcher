@@ -17,6 +17,8 @@ import pandas as pd
 
 from investment_researcher.config import DUCKDB_PATH_RUNTIME
 from investment_researcher.analytics.queries import (
+    cashflow_pivot,
+    cashflow_timeseries,
     get_all_tickers,
     growth_rates,
     latest_metric_for_all,
@@ -51,6 +53,8 @@ __all__ = [
     "ticker_summary",
     "metric_timeseries",
     "pivot_metrics",
+    "cashflow_timeseries",
+    "cashflow_pivot",
     "growth_rates",
     "latest_metric_for_all",
     # TTM & quarterly

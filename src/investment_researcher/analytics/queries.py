@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 
 from investment_researcher.config import DUCKDB_PATH_RUNTIME
-from investment_researcher.metrics import compute_ttm_metrics
+from investment_researcher.metrics import compute_ttm_metrics, derive_free_cash_flow
 from investment_researcher.ratios import (
     compute_ratios,
     compute_ratios_wide,
@@ -22,10 +22,85 @@ from investment_researcher.ratios import (
 )
 
 _DB_PATH = DUCKDB_PATH_RUNTIME
+_CASHFLOW_METRICS = [
+    "operating_cash_flow",
+    "investing_cash_flow",
+    "financing_cash_flow",
+    "capex",
+    "dividends_paid",
+    "free_cash_flow",
+]
 
 
 def _con() -> duckdb.DuckDBPyConnection:
     return duckdb.connect(_DB_PATH, read_only=True)
+
+
+def _with_canonical_free_cash_flow_pivot(pivoted: pd.DataFrame) -> pd.DataFrame:
+    """Ensure free_cash_flow follows the backend's OCF + CapEx convention."""
+    if pivoted.empty:
+        return pivoted
+
+    op = pivoted["operating_cash_flow"] if "operating_cash_flow" in pivoted.columns else pd.Series(np.nan, index=pivoted.index)
+    capex = pivoted["capex"] if "capex" in pivoted.columns else pd.Series(np.nan, index=pivoted.index)
+    existing = pivoted["free_cash_flow"] if "free_cash_flow" in pivoted.columns else pd.Series(np.nan, index=pivoted.index)
+
+    derived = pd.Series(
+        [
+            derive_free_cash_flow(operating_cash_flow, capex_value, existing_value)
+            for operating_cash_flow, capex_value, existing_value in zip(op.tolist(), capex.tolist(), existing.tolist())
+        ],
+        index=pivoted.index,
+        dtype="float64",
+    )
+
+    if derived.notna().sum() == 0:
+        return pivoted
+
+    enriched = pivoted.copy()
+    if "free_cash_flow" in enriched.columns:
+        enriched["free_cash_flow"] = derived
+    else:
+        insert_at = (
+            enriched.columns.get_loc("operating_cash_flow") + 1
+            if "operating_cash_flow" in enriched.columns
+            else len(enriched.columns)
+        )
+        enriched.insert(insert_at, "free_cash_flow", derived)
+    return enriched
+
+
+def cashflow_timeseries(
+    ticker: str,
+    period_type: str = "annual",
+) -> pd.DataFrame:
+    """Return cash-flow time series with canonical derived free cash flow."""
+    df = metric_timeseries(ticker, _CASHFLOW_METRICS, period_type)
+    if df.empty:
+        return df
+
+    pivoted = df.pivot_table(
+        index="period_end", columns="metric_type", values="value", aggfunc="first"
+    ).sort_index()
+    enriched = _with_canonical_free_cash_flow_pivot(pivoted)
+
+    return (
+        enriched.reset_index()
+        .melt(id_vars="period_end", var_name="metric_type", value_name="value")
+        .dropna(subset=["value"])
+        .sort_values(["period_end", "metric_type"])
+        .reset_index(drop=True)
+    )
+
+
+def cashflow_pivot(
+    ticker: str,
+    period_type: str = "annual",
+) -> pd.DataFrame:
+    """Return a cash-flow pivot with canonical derived free cash flow."""
+    return _with_canonical_free_cash_flow_pivot(
+        pivot_metrics(ticker, _CASHFLOW_METRICS, period_type)
+    )
 
 
 # ── Ticker helpers ───────────────────────────────────────────────────────────

@@ -35,13 +35,20 @@ const fcfChart = computed(() => {
   const p = pivot.value
   if (!p) return null
   const op = colData('operating_cash_flow')
+  if (!op.length) return null
+
+  const backendFcf = colData('free_cash_flow')
   const cap = colData('capex')
-  if (!op.length || !cap.length) return null
-  const fcf = op.map((v, i) => {
-    const c = cap[i]
-    if (v == null || c == null) return null
-    return v + c // capex is already negative
-  })
+  const fcf = backendFcf.length
+    ? backendFcf
+    : op.map((v, i) => {
+        const c = cap[i]
+        if (v == null || c == null) return null
+        return v + c
+      })
+
+  if (!fcf.length) return null
+
   return lineChart(
     periods.value,
     [

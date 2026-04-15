@@ -204,6 +204,56 @@ count = extract_company_facts('AAPL')
 print(f'Extracted {count} metrics for AAPL')
 ```
 
+### Re-run slow-path extraction for selected companies
+
+Use the installed `ir-rerun-slow-path` command when you want to repair or reprocess specific tickers without re-running the full weekly slow path. It deletes existing rows for those tickers from `financial_metrics` and `company_extraction_state`, then runs the slow-path companyfacts extractor again for those tickers only.
+
+This helper reuses the SEC metadata already present in your local edgartools cache. It does not refresh bulk metadata first.
+
+**Docker Compose (recommended when using the containerized stack):**
+
+If the rerun helper was added after your containers were built, rebuild the Python service images first so the installed package in the containers includes the new code:
+
+```bash
+docker compose up -d --build ir-service api
+```
+
+```bash
+docker compose exec -T ir-service ir-rerun-slow-path AAPL MSFT
+```
+
+The command also accepts comma-separated input, for example `docker compose exec -T ir-service ir-rerun-slow-path AAPL,MSFT,NVDA`.
+
+Each result row includes `ticker`, `deleted_rows`, `deleted_state_rows`, and `written_rows`. Add `--compact` if you want single-line JSON output.
+
+### Normalize stored metric signs in an existing DuckDB
+
+Databases populated before the canonical sign change can still contain mixed conventions, for example positive `capex` or positive `cost_of_revenue`. New ingestions now normalize signs on write, but existing rows need a one-time repair.
+
+Preview the change first:
+
+```bash
+docker compose exec -T ir-service ir-normalize-metric-signs --dry-run
+```
+
+Then apply it once:
+
+```bash
+docker compose exec -T ir-service ir-normalize-metric-signs
+```
+
+This command records a maintenance marker inside DuckDB and refuses to run again unless you pass `--force`. That guard matters because `income_tax_expense` uses a full sign flip rather than a magnitude-only normalization.
+
+**HTTP API (for a writable API process):**
+
+```bash
+curl -X POST http://localhost:8080/api/companies/slow-path/rerun \
+    -H "Content-Type: application/json" \
+    -d '{"tickers":["AAPL","MSFT"]}'
+```
+
+The default Docker Compose `api` container mounts DuckDB read-only, so Docker-based reruns should go through `ir-service`. If you need fresh bulk SEC metadata before re-extracting, refresh metadata separately first, then run the targeted rerun.
+
 ## Streamlit Demo
 
 The demo is a multi-tab financial analytics dashboard that reads directly from DuckDB. Populate the database first (via Docker or a local seed run), then launch:

@@ -30,6 +30,10 @@ dev = [
     "pytest-asyncio>=0.23",
 ]
 
+[project.scripts]
+ir-rerun-slow-path = "investment_researcher.cli:rerun_slow_path_cli"
+ir-normalize-metric-signs = "investment_researcher.cli:normalize_metric_signs_cli"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/investment_researcher"]
 

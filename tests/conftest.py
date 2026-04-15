@@ -49,6 +49,7 @@ if _FIXTURES_DIR not in sys.path:
 # ── Step 3: fixtures ───────────────────────────────────────────────────────────
 import pandas as pd  # noqa: E402 — must come after env setup
 import pytest  # noqa: E402
+from investment_researcher.signs import normalize_extracted_metric_value  # noqa: E402
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -102,7 +103,7 @@ def session_duckdb():
                     "ticker": ticker,
                     "cik": cik,
                     "metric_type": g.metric_type,
-                    "value": g.value,
+                    "value": normalize_extracted_metric_value(g.metric_type, g.value),
                     "currency": "USD",
                     "period": f"Fiscal Year Ended {g.period_end.strftime('%m/%d/%Y')}",
                     "period_type": "annual",
@@ -117,7 +118,7 @@ def session_duckdb():
                     "ticker": ticker,
                     "cik": cik,
                     "metric_type": g.metric_type,
-                    "value": g.value,
+                    "value": normalize_extracted_metric_value(g.metric_type, g.value),
                     "currency": "USD",
                     "period": f"Quarter Ended {g.period_end.strftime('%m/%d/%Y')}",
                     "period_type": "quarterly",

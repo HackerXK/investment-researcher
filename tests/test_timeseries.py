@@ -13,6 +13,7 @@ from investment_researcher.ingestion.timeseries import (
     get_connection,
     initialize_db,
     is_db_empty,
+    normalize_financial_metric_signs,
     write_financial_metrics,
 )
 
@@ -321,6 +322,142 @@ class TestDeleteCompanyFinancialMetrics:
                 "SELECT ticker, metric_type FROM financial_metrics ORDER BY ticker, metric_type"
             ).fetchall()
             assert remaining == [("MSFT", "revenue")]
+        finally:
+            con.close()
+
+
+class TestNormalizeFinancialMetricSigns:
+    def test_normalizes_existing_rows_and_records_maintenance_run(self, tmp_db):
+        initialize_db(db_path=tmp_db)
+        df = pd.DataFrame([
+            {
+                "ticker": "AAPL",
+                "metric_type": "capex",
+                "value": 12.0,
+                "period": "Twelve Months Ended 09/30/2023",
+                "period_type": "annual",
+                "period_end": "2023-09-30",
+            },
+            {
+                "ticker": "AAPL",
+                "metric_type": "dividends_paid",
+                "value": 5.0,
+                "period": "Twelve Months Ended 09/30/2023",
+                "period_type": "annual",
+                "period_end": "2023-09-30",
+            },
+            {
+                "ticker": "AAPL",
+                "metric_type": "cash",
+                "value": -30.0,
+                "period": "Twelve Months Ended 09/30/2023",
+                "period_type": "annual",
+                "period_end": "2023-09-30",
+            },
+            {
+                "ticker": "AAPL",
+                "metric_type": "income_tax_expense",
+                "value": 7.0,
+                "period": "Twelve Months Ended 09/30/2023",
+                "period_type": "annual",
+                "period_end": "2023-09-30",
+            },
+            {
+                "ticker": "AAPL",
+                "metric_type": "revenue",
+                "value": 100.0,
+                "period": "Twelve Months Ended 09/30/2023",
+                "period_type": "annual",
+                "period_end": "2023-09-30",
+            },
+        ])
+        write_financial_metrics(df, db_path=tmp_db)
+
+        payload = normalize_financial_metric_signs(db_path=tmp_db)
+
+        assert payload["dry_run"] is False
+        assert payload["already_applied"] is False
+        assert payload["rows_changed"] == 4
+        assert payload["by_rule"] == {
+            "negative_magnitude": 2,
+            "positive_magnitude": 1,
+            "sign_flip": 1,
+        }
+
+        con = get_connection(tmp_db)
+        try:
+            rows = con.execute(
+                "SELECT metric_type, value FROM financial_metrics ORDER BY metric_type"
+            ).fetchall()
+            assert rows == [
+                ("capex", -12.0),
+                ("cash", 30.0),
+                ("dividends_paid", -5.0),
+                ("income_tax_expense", -7.0),
+                ("revenue", 100.0),
+            ]
+
+            maintenance = con.execute(
+                "SELECT COUNT(*) FROM db_maintenance_runs WHERE name = ?",
+                ["normalize_financial_metric_signs_v1"],
+            ).fetchone()[0]
+            assert maintenance == 1
+        finally:
+            con.close()
+
+        with pytest.raises(ValueError, match="already been applied"):
+            normalize_financial_metric_signs(db_path=tmp_db)
+
+        dry_run_payload = normalize_financial_metric_signs(db_path=tmp_db, dry_run=True)
+        assert dry_run_payload == {
+            "dry_run": True,
+            "already_applied": True,
+            "maintenance_name": "normalize_financial_metric_signs_v1",
+            "rows_changed": 0,
+            "by_rule": {
+                "negative_magnitude": 0,
+                "positive_magnitude": 0,
+                "sign_flip": 0,
+            },
+            "by_metric_type": [],
+        }
+
+    def test_dry_run_reports_changes_without_modifying_rows(self, tmp_db):
+        initialize_db(db_path=tmp_db)
+        df = pd.DataFrame([
+            {
+                "ticker": "AAPL",
+                "metric_type": "capex",
+                "value": 12.0,
+                "period": "Twelve Months Ended 09/30/2023",
+                "period_type": "annual",
+                "period_end": "2023-09-30",
+            },
+            {
+                "ticker": "AAPL",
+                "metric_type": "income_tax_expense",
+                "value": 7.0,
+                "period": "Twelve Months Ended 09/30/2023",
+                "period_type": "annual",
+                "period_end": "2023-09-30",
+            },
+        ])
+        write_financial_metrics(df, db_path=tmp_db)
+
+        payload = normalize_financial_metric_signs(db_path=tmp_db, dry_run=True)
+
+        assert payload["dry_run"] is True
+        assert payload["rows_changed"] == 2
+
+        con = get_connection(tmp_db)
+        try:
+            rows = con.execute(
+                "SELECT metric_type, value FROM financial_metrics ORDER BY metric_type"
+            ).fetchall()
+            assert rows == [
+                ("capex", 12.0),
+                ("income_tax_expense", 7.0),
+            ]
         finally:
             con.close()
 

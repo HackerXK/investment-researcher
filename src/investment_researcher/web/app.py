@@ -16,6 +16,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from investment_researcher.analytics import (
+    cashflow_pivot,
+    cashflow_timeseries,
     get_all_tickers,
     get_company_profile,
     get_filings_list,
@@ -145,12 +147,6 @@ _BALANCE_METRICS = [
     "stockholders_equity", "retained_earnings",
 ]
 
-# Cash Flow metrics
-_CASHFLOW_METRICS = [
-    "operating_cash_flow", "investing_cash_flow", "financing_cash_flow",
-    "capex", "dividends_paid",
-]
-
 # Key metrics for KPI cards
 _KEY_METRICS = [
     "revenue", "net_income", "eps_diluted", "common_shares_outstanding",
@@ -178,8 +174,8 @@ def api_financials(
         piv = pivot_metrics(ticker, _BALANCE_METRICS, period_type)
         return _sanitize({"pivot": _df_to_wide(piv)})
     elif tab == "cashflow":
-        ts = metric_timeseries(ticker, _CASHFLOW_METRICS, period_type)
-        piv = pivot_metrics(ticker, _CASHFLOW_METRICS, period_type)
+        ts = cashflow_timeseries(ticker, period_type)
+        piv = cashflow_pivot(ticker, period_type)
         return _sanitize({
             "timeseries": _df_to_records(ts),
             "pivot": _df_to_wide(piv),
