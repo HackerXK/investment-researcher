@@ -4,12 +4,13 @@ import { Card, CardContent, CardHeader, CardTitle } from '~/components/ui/card'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '~/components/ui/table'
 import type { FinancialsResponse } from '~/lib/api'
 import { barChart, lineChart } from '~/lib/charts'
-import { fmtMillions, deltaColor } from '~/lib/formatters'
+import { deltaColor, fmtMetricValue } from '~/lib/formatters'
 
 const props = defineProps<{ data: FinancialsResponse; ticker: string }>()
 
 // pivot shape: index=periods, columns=metrics, data[period_row][metric_col]
 const pivot = computed(() => props.data.pivot)
+const metricDisplayFormats = computed(() => props.data.metric_display_formats || {})
 const periods = computed(() => pivot.value?.index.map(p => p.slice(0, 10)) || [])
 const metrics = computed(() => pivot.value?.columns || [])
 
@@ -19,6 +20,10 @@ function colData(metric: string): (number | null)[] {
   const ci = p.columns.indexOf(metric)
   if (ci < 0) return []
   return p.data.map(row => row[ci])
+}
+
+function fmtTableValue(metric: string, val: number | null) {
+  return fmtMetricValue(val, metricDisplayFormats.value[metric] || 'millions')
 }
 
 const revenueChart = computed(() => {
@@ -107,7 +112,7 @@ const marginEmptyMessage = computed(() => {
     <!-- Data table: metrics as rows, periods as columns -->
     <Card v-if="pivot && pivot.columns.length > 0">
       <CardHeader class="pb-2">
-        <CardTitle class="text-base">Income Statement ($ millions)</CardTitle>
+        <CardTitle class="text-base">Income Statement</CardTitle>
       </CardHeader>
       <CardContent class="overflow-auto">
         <Table>
@@ -134,7 +139,7 @@ const marginEmptyMessage = computed(() => {
                 class="text-right text-sm tabular-nums"
                 :class="deltaColor(pivot.data[rowIdx][colIdx])"
               >
-                {{ fmtMillions(pivot.data[rowIdx][colIdx]) }}
+                {{ fmtTableValue(metric, pivot.data[rowIdx][colIdx]) }}
               </TableCell>
             </TableRow>
           </TableBody>

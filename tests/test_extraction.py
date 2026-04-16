@@ -277,6 +277,67 @@ class TestSlowPathExtraction:
             ("revenue", 1000.0, "10-K"),
         ]
 
+    def test_long_term_debt_prefers_noncurrent_over_total(self, db_paths):
+        db, state = db_paths
+
+        facts = MagicMock()
+
+        def fake_time_series(name):
+            if name == "long_term_debt":
+                return pd.DataFrame({
+                    "fiscal_period": ["FY"],
+                    "period_end": [date(2025, 9, 27)],
+                    "numeric_value": [90_678_000_000.0],
+                })
+            return pd.DataFrame()
+
+        facts.time_series = fake_time_series
+
+        query_mock = MagicMock()
+        query_mock.by_concept.return_value.execute.return_value = []
+        facts.query.return_value = query_mock
+
+        facts.to_dataframe = MagicMock(return_value=pd.DataFrame({
+            "concept": [
+                "us-gaap:LongTermDebt",
+                "us-gaap:LongTermDebtNoncurrent",
+                "us-gaap:LongTermDebtCurrent",
+                "us-gaap:CommercialPaper",
+            ],
+            "fiscal_period": ["FY", "FY", "FY", "FY"],
+            "period_end": [date(2025, 9, 27)] * 4,
+            "fiscal_year": [2025, 2025, 2025, 2025],
+            "numeric_value": [
+                90_678_000_000.0,
+                78_328_000_000.0,
+                12_350_000_000.0,
+                7_979_000_000.0,
+            ],
+            "unit": ["USD", "USD", "USD", "USD"],
+        }))
+
+        company = MagicMock()
+        company.cik = 320193
+        company.get_facts.return_value = facts
+
+        with patch("edgar.Company", return_value=company):
+            count = extract_company_facts("AAPL", db_path=db, state_db_path=state)
+
+        assert count == 3
+
+        with _db_connection(db) as con:
+            rows = con.execute(
+                "SELECT metric_type, value FROM financial_metrics "
+                "WHERE ticker = 'AAPL' AND period_type = 'annual' "
+                "ORDER BY metric_type"
+            ).fetchall()
+
+        assert rows == [
+            ("commercial_paper", 7_979_000_000.0),
+            ("long_term_debt", 78_328_000_000.0),
+            ("long_term_debt_current", 12_350_000_000.0),
+        ]
+
 
 class TestFastPathExtraction:
     """Tests for per-filing XBRL → DuckDB extraction."""

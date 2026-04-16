@@ -4,29 +4,38 @@ import { Card, CardContent, CardHeader, CardTitle } from '~/components/ui/card'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '~/components/ui/table'
 import type { QuarterlyResponse } from '~/lib/api'
 import { barChart } from '~/lib/charts'
-import { fmtMillions, deltaColor } from '~/lib/formatters'
+import { deltaColor, fmtMetricValue } from '~/lib/formatters'
 
 const props = defineProps<{ data: QuarterlyResponse; ticker: string }>()
 
 const qd = computed(() => props.data.quarterly)
-const periods = computed(() => qd.value?.index.map(p => p.slice(0, 10)) || [])
-const metrics = computed(() => qd.value?.columns || [])
+const metricDisplayFormats = computed(() => props.data.metric_display_formats || {})
+const periods = computed(() => qd.value?.columns || [])
+const metrics = computed(() => qd.value?.index || [])
 
-function colData(metric: string): (number | null)[] {
+function rowData(metric: string): (number | null)[] {
   const q = qd.value
   if (!q) return []
-  const ci = q.columns.indexOf(metric)
-  if (ci < 0) return []
-  return q.data.map(row => row[ci])
+  const ri = q.index.indexOf(metric)
+  if (ri < 0) return []
+  return q.data[ri] || []
+}
+
+function fmtTableValue(metric: string, val: number | null) {
+  return fmtMetricValue(val, metricDisplayFormats.value[metric] || 'millions')
+}
+
+function formatPeriodLabel(period: string) {
+  return period === 'TTM' ? 'TTM' : period.replace(/-/g, ' ')
 }
 
 const revenueChart = computed(() => {
   const q = qd.value
   if (!q) return null
-  const rev = colData('revenue')
+  const rev = rowData('revenue')
   if (!rev.length) return null
   const series = [{ name: 'Revenue', data: rev }]
-  const ni = colData('net_income')
+  const ni = rowData('net_income')
   if (ni.length) series.push({ name: 'Net Income', data: ni })
   return barChart(periods.value, series, { yPrefix: '$' })
 })
@@ -34,7 +43,7 @@ const revenueChart = computed(() => {
 const epsChart = computed(() => {
   const q = qd.value
   if (!q) return null
-  const eps = colData('eps_diluted')
+  const eps = rowData('eps_diluted')
   if (!eps.length) return null
   return barChart(periods.value, [{ name: 'EPS Diluted', data: eps }], { yPrefix: '$' })
 })
@@ -63,28 +72,28 @@ const epsChart = computed(() => {
 
     <Card v-if="qd && qd.columns.length > 0">
       <CardHeader class="pb-2">
-        <CardTitle class="text-base">Quarterly Detail ($ millions)</CardTitle>
+        <CardTitle class="text-base">Quarterly Detail</CardTitle>
       </CardHeader>
       <CardContent class="overflow-auto">
         <Table>
           <TableHeader>
             <TableRow>
               <TableHead class="sticky left-0 bg-card min-w-[180px]">Metric</TableHead>
-              <TableHead v-for="p in periods" :key="p" class="text-right min-w-[100px]">{{ p }}</TableHead>
+              <TableHead v-for="p in periods" :key="p" class="text-right min-w-[100px]">{{ formatPeriodLabel(p) }}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            <TableRow v-for="(metric, colIdx) in metrics" :key="metric">
+            <TableRow v-for="(metric, rowIdx) in metrics" :key="metric">
               <TableCell class="sticky left-0 bg-card font-medium text-sm capitalize">
                 {{ metric.replace(/_/g, ' ') }}
               </TableCell>
               <TableCell
-                v-for="(_, rowIdx) in periods"
-                :key="rowIdx"
+                v-for="(_, colIdx) in periods"
+                :key="colIdx"
                 class="text-right text-sm tabular-nums"
                 :class="deltaColor(qd.data[rowIdx][colIdx])"
               >
-                {{ fmtMillions(qd.data[rowIdx][colIdx]) }}
+                {{ fmtTableValue(metric, qd.data[rowIdx][colIdx]) }}
               </TableCell>
             </TableRow>
           </TableBody>

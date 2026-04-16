@@ -2,6 +2,8 @@
  * Typed API client for the FastAPI backend.
  */
 
+import type { MetricDisplayFormat } from '~/lib/formatters'
+
 const API_BASE = () => {
   if (import.meta.server) {
     return process.env.NUXT_PUBLIC_API_BASE || 'http://localhost:8080'
@@ -71,6 +73,7 @@ export interface FinancialsResponse {
   earnings_quality?: WideData
   summary?: any[]
   ttm?: Record<string, number | null>
+  metric_display_formats?: Record<string, MetricDisplayFormat>
 }
 
 export function getFinancials(
@@ -106,6 +109,7 @@ export function getHealth(ticker: string, periodType = 'annual'): Promise<Health
 
 export interface QuarterlyResponse {
   quarterly: WideData
+  metric_display_formats?: Record<string, MetricDisplayFormat>
 }
 
 export function getQuarterly(ticker: string, n = 10): Promise<QuarterlyResponse> {

@@ -172,6 +172,20 @@ RAW_CONCEPT_MAP: dict[str, str] = {
     "us-gaap:PaymentsOfDividendsCommonStock": "dividends_paid",
 }
 
+_LONG_TERM_DEBT_TOTAL_CONCEPTS = frozenset({
+    "us-gaap:LongTermDebt",
+    "us-gaap:LongTermDebtAndCapitalLeaseObligations",
+})
+
+_LONG_TERM_DEBT_NONCURRENT_CONCEPTS = frozenset({
+    "us-gaap:LongTermDebtNoncurrent",
+})
+
+_LONG_TERM_DEBT_CURRENT_CONCEPTS = frozenset({
+    "us-gaap:LongTermDebtCurrent",
+    "us-gaap:LongTermDebtAndCapitalLeaseObligationsCurrent",
+})
+
 
 def _make_period_label(period_end: date, period_type: str) -> str:
     """Create unambiguous period label using the SEC convention.
@@ -487,6 +501,7 @@ def extract_company_facts(
 
     # ── Strategy 2: raw to_dataframe() with duration-based filtering ──────
     strategy2_rows: list[dict] = []
+    raw_df = None
     try:
         raw_df = facts.to_dataframe()
         if raw_df is not None and len(raw_df) > 0:
@@ -531,6 +546,27 @@ def extract_company_facts(
         subset=["ticker", "metric_type", "period_type", "period_end"],
         keep="first",
     )
+
+    canonical_long_term_debt_df = _extract_canonical_long_term_debt_from_raw(
+        raw_df,
+        ticker,
+        company_cik,
+    )
+    if not canonical_long_term_debt_df.empty:
+        override_keys = canonical_long_term_debt_df[["period_type", "period_end"]].drop_duplicates()
+        override_keys["_override"] = True
+        df = df.merge(override_keys, on=["period_type", "period_end"], how="left")
+        df = df[
+            ~(
+                (df["metric_type"] == "long_term_debt")
+                & df["_override"].eq(True)
+            )
+        ].drop(columns=["_override"])
+        df = pd.concat([df, canonical_long_term_debt_df], ignore_index=True)
+        df = df.drop_duplicates(
+            subset=["ticker", "metric_type", "period_type", "period_end"],
+            keep="last",
+        )
 
     derived_df = _derive_missing_flow_rows(df)
     if not derived_df.empty:
@@ -780,6 +816,101 @@ def _extract_from_raw_df(
                 concept_df, ticker, cik, metric_type, all_rows,
                 include_q4=True,
             )
+
+
+def _extract_canonical_long_term_debt_from_raw(
+    raw_df: pd.DataFrame | None,
+    ticker: str,
+    cik: str | None,
+) -> pd.DataFrame:
+    """Build canonical long-term debt rows from raw SEC concepts.
+
+    Canonical ``long_term_debt`` is the noncurrent portion only.
+    Prefer ``LongTermDebtNoncurrent`` when present. When only a broader total
+    long-term-debt concept plus a current portion is available, derive the
+    noncurrent value as ``total - current``.
+    """
+    if raw_df is None or raw_df.empty:
+        return pd.DataFrame()
+    if "concept" not in raw_df.columns or "fiscal_period" not in raw_df.columns:
+        return pd.DataFrame()
+
+    debt_df = raw_df[
+        raw_df["concept"].isin(
+            _LONG_TERM_DEBT_TOTAL_CONCEPTS
+            | _LONG_TERM_DEBT_NONCURRENT_CONCEPTS
+            | _LONG_TERM_DEBT_CURRENT_CONCEPTS
+        )
+    ].copy()
+    if debt_df.empty:
+        return pd.DataFrame()
+
+    if "unit" in debt_df.columns:
+        debt_df = debt_df[debt_df["unit"] == "USD"]
+    if debt_df.empty:
+        return pd.DataFrame()
+
+    def _build_value_map(df_part: pd.DataFrame, concepts: frozenset[str]) -> dict[date, float]:
+        subset = df_part[df_part["concept"].isin(concepts)]
+        if subset.empty:
+            return {}
+        deduped = _dedup_period_end(subset)
+        result: dict[date, float] = {}
+        for _, row in deduped.iterrows():
+            pe_date = _to_date(row.get("period_end"))
+            val = row.get("numeric_value")
+            if pe_date is None or pd.isna(val):
+                continue
+            result[pe_date] = float(val)
+        return result
+
+    rows: list[dict] = []
+    for fiscal_period, period_type in [
+        ("FY", "annual"),
+        ("Q1", "quarterly"),
+        ("Q2", "quarterly"),
+        ("Q3", "quarterly"),
+        ("Q4", "quarterly"),
+    ]:
+        period_df = debt_df[debt_df["fiscal_period"] == fiscal_period]
+        if period_df.empty:
+            continue
+
+        noncurrent_by_period = _build_value_map(period_df, _LONG_TERM_DEBT_NONCURRENT_CONCEPTS)
+        total_by_period = _build_value_map(period_df, _LONG_TERM_DEBT_TOTAL_CONCEPTS)
+        current_by_period = _build_value_map(period_df, _LONG_TERM_DEBT_CURRENT_CONCEPTS)
+
+        for period_end in sorted(
+            set(noncurrent_by_period) | set(total_by_period) | set(current_by_period)
+        ):
+            value = noncurrent_by_period.get(period_end)
+            if value is None:
+                total_value = total_by_period.get(period_end)
+                current_value = current_by_period.get(period_end)
+                if (
+                    total_value is not None
+                    and current_value is not None
+                    and total_value >= current_value
+                ):
+                    value = total_value - current_value
+                else:
+                    value = total_value
+            if value is None:
+                continue
+
+            rows.append(
+                _make_row(
+                    ticker,
+                    cik,
+                    "long_term_debt",
+                    value,
+                    period_end,
+                    period_type,
+                    "10-K" if period_type == "annual" else "10-Q",
+                )
+            )
+
+    return pd.DataFrame(rows)
 
 
 def _extract_flow_from_raw(

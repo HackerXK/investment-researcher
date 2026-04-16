@@ -30,6 +30,8 @@ QUARTERLY_METRICS_TO_CHECK = {
     "total_assets",
     "stockholders_equity",
     "eps_diluted",
+    "long_term_debt",
+    "short_term_debt",
 }
 CORE_METRICS = ("revenue", "net_income", "total_assets")
 BALANCE_SHEET_TOLERANCE_PCT = 10.0

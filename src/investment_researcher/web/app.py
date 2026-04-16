@@ -34,6 +34,7 @@ from investment_researcher.analytics import (
     ticker_summary,
     ttm_metrics,
 )
+from investment_researcher.analytics.metric_metadata import get_metric_display_formats
 from investment_researcher.ingestion.edgar.financials import rerun_slow_path_for_companies
 from investment_researcher.ingestion.state import initialize_state_db
 from investment_researcher.ingestion.timeseries import initialize_db
@@ -169,16 +170,21 @@ def api_financials(
         return _sanitize({
             "timeseries": _df_to_records(ts),
             "pivot": _df_to_wide(piv),
+            "metric_display_formats": get_metric_display_formats(list(piv.columns)),
         })
     elif tab == "balance":
         piv = pivot_metrics(ticker, _BALANCE_METRICS, period_type)
-        return _sanitize({"pivot": _df_to_wide(piv)})
+        return _sanitize({
+            "pivot": _df_to_wide(piv),
+            "metric_display_formats": get_metric_display_formats(list(piv.columns)),
+        })
     elif tab == "cashflow":
         ts = cashflow_timeseries(ticker, period_type)
         piv = cashflow_pivot(ticker, period_type)
         return _sanitize({
             "timeseries": _df_to_records(ts),
             "pivot": _df_to_wide(piv),
+            "metric_display_formats": get_metric_display_formats(list(piv.columns)),
         })
     elif tab == "growth":
         g = growth_rates(ticker, _GROWTH_METRICS, period_type)
@@ -253,7 +259,10 @@ def api_quarterly(
         "research_and_development", "depreciation_and_amortization",
     ]
     qd = quarterly_detail(ticker, qd_metrics, n_quarters=n_quarters)
-    return _sanitize({"quarterly": _df_to_wide(qd)})
+    return _sanitize({
+        "quarterly": _df_to_wide(qd),
+        "metric_display_formats": get_metric_display_formats(list(qd.index)),
+    })
 
 
 # ---------------------------------------------------------------------------

@@ -50,16 +50,25 @@ DERA_BASE_URL = "https://www.sec.gov/files/dera/data/financial-statement-data-se
 
 FMP_BASE_URL = "https://financialmodelingprep.com/stable"
 
-# Metrics we want golden data for (representative subset of 12)
+# Metrics we want golden data for (representative subset of 14)
 GOLDEN_FLOW_METRICS = {
     "revenue", "net_income", "gross_profit", "operating_income",
     "operating_cash_flow", "eps_diluted", "capex",
 }
 GOLDEN_STOCK_METRICS = {
     "total_assets", "total_liabilities", "stockholders_equity",
-    "cash", "total_current_assets",
+    "cash", "total_current_assets", "long_term_debt", "short_term_debt",
 }
 GOLDEN_METRICS = GOLDEN_FLOW_METRICS | GOLDEN_STOCK_METRICS
+
+DERA_INTERNAL_METRICS = {
+    "__debt_current",
+    "__commercial_paper",
+    "__long_term_debt_current",
+    "__long_term_debt_noncurrent",
+    "__long_term_debt_total",
+}
+DERA_STOCK_METRICS = GOLDEN_STOCK_METRICS | DERA_INTERNAL_METRICS
 
 # Golden points intentionally excluded from test generation because the current
 # extractor does not surface them reliably enough for stable golden assertions.
@@ -72,6 +81,15 @@ EXCLUDED_GOLDEN_POINTS = {
     ("WMT", "total_liabilities", "annual", date(2023, 1, 31)),
     ("WMT", "total_liabilities", "annual", date(2024, 1, 31)),
 }
+
+# FMP exposes XOM long-term debt without a current-LTD field, so it still
+# does not reconcile cleanly to the extractor's noncurrent debt semantics.
+# Keep those points excluded until a stable source for the current portion is
+# available.
+EXCLUDED_GOLDEN_RULES.update({
+    ("XOM", "long_term_debt", "annual"),
+    ("XOM", "long_term_debt", "quarterly"),
+})
 
 # DERA and FMP occasionally disagree on specific points where the raw DERA
 # filing context is known to be noisy. Prefer the FMP value for these curated
@@ -92,6 +110,55 @@ def _should_exclude_golden_point(ticker: str, key: tuple[str, str, date]) -> boo
         or (ticker, metric_type, period_type, period_end) in EXCLUDED_GOLDEN_POINTS
     )
 
+
+def _canonicalize_dera_debt_metrics(
+    results: dict[tuple[str, str, date], float],
+) -> dict[tuple[str, str, date], float]:
+    """Apply the extractor's canonical debt semantics to DERA results."""
+    debt_periods = {
+        (period_type, period_end)
+        for metric_type, period_type, period_end in results
+        if metric_type in {
+            "__debt_current",
+            "__commercial_paper",
+            "__long_term_debt_current",
+            "__long_term_debt_noncurrent",
+            "__long_term_debt_total",
+            "short_term_debt",
+        }
+    }
+
+    for period_type, period_end in debt_periods:
+        debt_current = results.get(("__debt_current", period_type, period_end))
+        noncurrent = results.get(("__long_term_debt_noncurrent", period_type, period_end))
+        total = results.get(("__long_term_debt_total", period_type, period_end))
+        current = results.get(("__long_term_debt_current", period_type, period_end))
+        commercial_paper = results.get(("__commercial_paper", period_type, period_end))
+        short_term_debt = results.get(("short_term_debt", period_type, period_end))
+        current_component = current if current is not None else debt_current
+
+        if noncurrent is not None:
+            results[("long_term_debt", period_type, period_end)] = noncurrent
+        elif total is not None and current_component is not None:
+            derived_noncurrent = total - current_component
+            if derived_noncurrent >= 0:
+                results[("long_term_debt", period_type, period_end)] = derived_noncurrent
+        elif total is not None:
+            results[("long_term_debt", period_type, period_end)] = total
+
+        if short_term_debt is None and debt_current is not None:
+            short_term_debt = debt_current
+        elif short_term_debt is None and (commercial_paper is not None or current is not None):
+            short_term_debt = (commercial_paper or 0.0) + (current or 0.0)
+        if short_term_debt is not None:
+            results[("short_term_debt", period_type, period_end)] = short_term_debt
+
+    for key in list(results.keys()):
+        if key[0] in DERA_INTERNAL_METRICS:
+            del results[key]
+
+    return results
+
 # DERA num.txt tag → our metric_type.  Tags appear WITHOUT the "us-gaap:" prefix.
 DERA_TAG_MAP: dict[str, str] = {
     # Income statement — AAPL uses these specific concepts
@@ -108,6 +175,15 @@ DERA_TAG_MAP: dict[str, str] = {
     "StockholdersEquity": "stockholders_equity",
     "CashAndCashEquivalentsAtCarryingValue": "cash",
     "AssetsCurrent": "total_current_assets",
+    "LongTermDebt": "__long_term_debt_total",
+    "LongTermDebtAndCapitalLeaseObligations": "__long_term_debt_total",
+    "LongTermDebtNoncurrent": "__long_term_debt_noncurrent",
+    "LongTermDebtCurrent": "__long_term_debt_current",
+    "LongTermDebtAndCapitalLeaseObligationsCurrent": "__long_term_debt_current",
+    "CommercialPaper": "__commercial_paper",
+    "ShortTermBorrowings": "short_term_debt",
+    "ShortTermDebt": "short_term_debt",
+    "DebtCurrent": "__debt_current",
     # Cash flow
     "NetCashProvidedByUsedInOperatingActivities": "operating_cash_flow",
     "PaymentsToAcquirePropertyPlantAndEquipment": "capex",
@@ -128,6 +204,8 @@ FMP_BALANCE_MAP = {
     "totalStockholdersEquity": "stockholders_equity",
     "cashAndCashEquivalents": "cash",
     "totalCurrentAssets": "total_current_assets",
+    "longTermDebt": "long_term_debt",
+    "shortTermDebt": "short_term_debt",
 }
 FMP_CASHFLOW_MAP = {
     "operatingCashFlow": "operating_cash_flow",
@@ -254,7 +332,7 @@ def fetch_dera_data(ticker: str, cik: int) -> dict[tuple[str, str, date], float]
                     continue
                 tag = row.get("tag", "")
                 metric_type = DERA_TAG_MAP.get(tag)
-                if metric_type is None or metric_type not in GOLDEN_METRICS:
+                if metric_type is None or metric_type not in (GOLDEN_METRICS | DERA_INTERNAL_METRICS):
                     continue
 
                 # Skip co-registrant data — we want the primary filer
@@ -281,7 +359,7 @@ def fetch_dera_data(ticker: str, cik: int) -> dict[tuple[str, str, date], float]
 
                 # Classify: qtrs=0 → instant (balance sheet), qtrs=1 → quarterly,
                 # qtrs=4 → annual.  Skip YTD (qtrs=2,3) — we want discrete values.
-                if qtrs == 0 and metric_type in GOLDEN_STOCK_METRICS:
+                if qtrs == 0 and metric_type in DERA_STOCK_METRICS:
                     filing_form = company_filings[adsh]["form"]
                     filing_fp = company_filings[adsh].get("fp", "")
                     if filing_form in ("10-K", "10-K/A") and filing_fp == "FY":
@@ -368,6 +446,7 @@ def fetch_dera_data(ticker: str, cik: int) -> dict[tuple[str, str, date], float]
                       f"(derived from TA={ta_val:,.0f} - TL={tl_val:,.0f})")
                 results[key] = derived_se
 
+    results = _canonicalize_dera_debt_metrics(results)
     print(f"  Resolved {multi_value_count} multi-value keys "
           f"→ {len(results)} final values")
     return results

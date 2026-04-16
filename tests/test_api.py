@@ -79,6 +79,8 @@ async def test_income_pivot_shape(client: AsyncClient):
     assert len(pivot["index"]) > 0, "Should have at least one period"
     assert len(pivot["columns"]) > 0, "Should have at least one metric"
     assert len(pivot["data"]) == len(pivot["index"]), "One data row per period"
+    assert data["metric_display_formats"]["eps_diluted"] == "per_share"
+    assert data["metric_display_formats"]["revenue"] == "millions"
 
 
 @pytest.mark.asyncio
@@ -168,6 +170,8 @@ async def test_quarterly(client: AsyncClient):
     assert resp.status_code == 200
     data = resp.json()
     assert "quarterly" in data
+    assert data["metric_display_formats"]["eps_diluted"] == "per_share"
+    assert data["metric_display_formats"]["common_shares_outstanding"] == "count"
     qd = data["quarterly"]
     assert "index" in qd and "columns" in qd
     assert len(qd["data"]) > 0, "Should have quarterly data"
