@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '~/components/ui/card'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '~/components/ui/table'
 import type { FinancialsResponse } from '~/lib/api'
 import { barChart, lineChart } from '~/lib/charts'
+import { buildStatementTableView } from '~/lib/financialTables'
 import { deltaColor, fmtMetricValue } from '~/lib/formatters'
 
 const props = defineProps<{ data: FinancialsResponse; ticker: string }>()
@@ -13,6 +14,7 @@ const pivot = computed(() => props.data.pivot)
 const metricDisplayFormats = computed(() => props.data.metric_display_formats || {})
 const periods = computed(() => pivot.value?.index.map(p => p.slice(0, 10)) || [])
 const metrics = computed(() => pivot.value?.columns || [])
+const table = computed(() => buildStatementTableView(pivot.value, props.data.ttm))
 
 function colData(metric: string): (number | null)[] {
   const p = pivot.value
@@ -110,7 +112,7 @@ const marginEmptyMessage = computed(() => {
     </div>
 
     <!-- Data table: metrics as rows, periods as columns -->
-    <Card v-if="pivot && pivot.columns.length > 0">
+    <Card v-if="table.metrics.length > 0">
       <CardHeader class="pb-2">
         <CardTitle class="text-base">Income Statement</CardTitle>
       </CardHeader>
@@ -120,7 +122,7 @@ const marginEmptyMessage = computed(() => {
             <TableRow>
               <TableHead class="sticky left-0 bg-card min-w-[180px]">Metric</TableHead>
               <TableHead
-                v-for="p in periods"
+                v-for="p in table.periods"
                 :key="p"
                 class="text-right min-w-[100px]"
               >
@@ -129,17 +131,17 @@ const marginEmptyMessage = computed(() => {
             </TableRow>
           </TableHeader>
           <TableBody>
-            <TableRow v-for="(metric, colIdx) in metrics" :key="metric">
+            <TableRow v-for="(metric, rowIdx) in table.metrics" :key="metric">
               <TableCell class="sticky left-0 bg-card font-medium text-sm capitalize">
                 {{ metric.replace(/_/g, ' ') }}
               </TableCell>
               <TableCell
-                v-for="(_, rowIdx) in periods"
-                :key="rowIdx"
+                v-for="(value, colIdx) in table.values[rowIdx]"
+                :key="colIdx"
                 class="text-right text-sm tabular-nums"
-                :class="deltaColor(pivot.data[rowIdx][colIdx])"
+                :class="deltaColor(value)"
               >
-                {{ fmtTableValue(metric, pivot.data[rowIdx][colIdx]) }}
+                {{ fmtTableValue(metric, value) }}
               </TableCell>
             </TableRow>
           </TableBody>

@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '~/components/ui/card'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '~/components/ui/table'
 import type { QuarterlyResponse } from '~/lib/api'
 import { barChart } from '~/lib/charts'
+import { buildMetricRowTableView } from '~/lib/financialTables'
 import { deltaColor, fmtMetricValue } from '~/lib/formatters'
 
 const props = defineProps<{ data: QuarterlyResponse; ticker: string }>()
@@ -12,6 +13,7 @@ const qd = computed(() => props.data.quarterly)
 const metricDisplayFormats = computed(() => props.data.metric_display_formats || {})
 const periods = computed(() => qd.value?.columns || [])
 const metrics = computed(() => qd.value?.index || [])
+const table = computed(() => buildMetricRowTableView(qd.value))
 
 function rowData(metric: string): (number | null)[] {
   const q = qd.value
@@ -70,7 +72,7 @@ const epsChart = computed(() => {
       </Card>
     </div>
 
-    <Card v-if="qd && qd.columns.length > 0">
+    <Card v-if="table.metrics.length > 0">
       <CardHeader class="pb-2">
         <CardTitle class="text-base">Quarterly Detail</CardTitle>
       </CardHeader>
@@ -79,21 +81,21 @@ const epsChart = computed(() => {
           <TableHeader>
             <TableRow>
               <TableHead class="sticky left-0 bg-card min-w-[180px]">Metric</TableHead>
-              <TableHead v-for="p in periods" :key="p" class="text-right min-w-[100px]">{{ formatPeriodLabel(p) }}</TableHead>
+              <TableHead v-for="p in table.periods" :key="p" class="text-right min-w-[100px]">{{ formatPeriodLabel(p) }}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            <TableRow v-for="(metric, rowIdx) in metrics" :key="metric">
+            <TableRow v-for="(metric, rowIdx) in table.metrics" :key="metric">
               <TableCell class="sticky left-0 bg-card font-medium text-sm capitalize">
                 {{ metric.replace(/_/g, ' ') }}
               </TableCell>
               <TableCell
-                v-for="(_, colIdx) in periods"
+                v-for="(value, colIdx) in table.values[rowIdx]"
                 :key="colIdx"
                 class="text-right text-sm tabular-nums"
-                :class="deltaColor(qd.data[rowIdx][colIdx])"
+                :class="deltaColor(value)"
               >
-                {{ fmtTableValue(metric, qd.data[rowIdx][colIdx]) }}
+                {{ fmtTableValue(metric, value) }}
               </TableCell>
             </TableRow>
           </TableBody>

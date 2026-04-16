@@ -170,12 +170,14 @@ def api_financials(
         return _sanitize({
             "timeseries": _df_to_records(ts),
             "pivot": _df_to_wide(piv),
+            "ttm": ttm_metrics(ticker, _INCOME_METRICS),
             "metric_display_formats": get_metric_display_formats(list(piv.columns)),
         })
     elif tab == "balance":
         piv = pivot_metrics(ticker, _BALANCE_METRICS, period_type)
         return _sanitize({
             "pivot": _df_to_wide(piv),
+            "ttm": ttm_metrics(ticker, _BALANCE_METRICS),
             "metric_display_formats": get_metric_display_formats(list(piv.columns)),
         })
     elif tab == "cashflow":
@@ -184,6 +186,7 @@ def api_financials(
         return _sanitize({
             "timeseries": _df_to_records(ts),
             "pivot": _df_to_wide(piv),
+            "ttm": ttm_metrics(ticker, list(piv.columns)),
             "metric_display_formats": get_metric_display_formats(list(piv.columns)),
         })
     elif tab == "growth":

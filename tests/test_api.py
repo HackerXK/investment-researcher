@@ -71,6 +71,18 @@ async def test_financials_tabs(client: AsyncClient, tab: str):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("tab", ["income", "balance", "cashflow"])
+async def test_statement_tabs_include_ttm(client: AsyncClient, tab: str):
+    resp = await client.get(f"/api/companies/AAPL/financials", params={"tab": tab})
+    assert resp.status_code == 200
+
+    data = resp.json()
+    assert "ttm" in data
+    assert isinstance(data["ttm"], dict)
+    assert len(data["ttm"]) > 0
+
+
+@pytest.mark.asyncio
 async def test_income_pivot_shape(client: AsyncClient):
     resp = await client.get("/api/companies/AAPL/financials", params={"tab": "income"})
     data = resp.json()
@@ -79,6 +91,7 @@ async def test_income_pivot_shape(client: AsyncClient):
     assert len(pivot["index"]) > 0, "Should have at least one period"
     assert len(pivot["columns"]) > 0, "Should have at least one metric"
     assert len(pivot["data"]) == len(pivot["index"]), "One data row per period"
+    assert "revenue" in data["ttm"]
     assert data["metric_display_formats"]["eps_diluted"] == "per_share"
     assert data["metric_display_formats"]["revenue"] == "millions"
 

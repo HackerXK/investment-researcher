@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '~/components/ui/card'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '~/components/ui/table'
 import type { FinancialsResponse } from '~/lib/api'
 import { barChart, lineChart } from '~/lib/charts'
+import { buildStatementTableView } from '~/lib/financialTables'
 import { fmtMillions, deltaColor } from '~/lib/formatters'
 
 const props = defineProps<{ data: FinancialsResponse; ticker: string }>()
@@ -11,6 +12,7 @@ const props = defineProps<{ data: FinancialsResponse; ticker: string }>()
 const pivot = computed(() => props.data.pivot)
 const periods = computed(() => pivot.value?.index.map(p => p.slice(0, 10)) || [])
 const metrics = computed(() => pivot.value?.columns || [])
+const table = computed(() => buildStatementTableView(pivot.value, props.data.ttm))
 
 function colData(metric: string): (number | null)[] {
   const p = pivot.value
@@ -80,7 +82,7 @@ const fcfChart = computed(() => {
       </Card>
     </div>
 
-    <Card v-if="pivot && pivot.columns.length > 0">
+    <Card v-if="table.metrics.length > 0">
       <CardHeader class="pb-2">
         <CardTitle class="text-base">Cash Flow Statement ($ millions)</CardTitle>
       </CardHeader>
@@ -89,21 +91,21 @@ const fcfChart = computed(() => {
           <TableHeader>
             <TableRow>
               <TableHead class="sticky left-0 bg-card min-w-[180px]">Metric</TableHead>
-              <TableHead v-for="p in periods" :key="p" class="text-right min-w-[100px]">{{ p }}</TableHead>
+              <TableHead v-for="p in table.periods" :key="p" class="text-right min-w-[100px]">{{ p }}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            <TableRow v-for="(metric, colIdx) in metrics" :key="metric">
+            <TableRow v-for="(metric, rowIdx) in table.metrics" :key="metric">
               <TableCell class="sticky left-0 bg-card font-medium text-sm capitalize">
                 {{ metric.replace(/_/g, ' ') }}
               </TableCell>
               <TableCell
-                v-for="(_, rowIdx) in periods"
-                :key="rowIdx"
+                v-for="(value, colIdx) in table.values[rowIdx]"
+                :key="colIdx"
                 class="text-right text-sm tabular-nums"
-                :class="deltaColor(pivot.data[rowIdx][colIdx])"
+                :class="deltaColor(value)"
               >
-                {{ fmtMillions(pivot.data[rowIdx][colIdx]) }}
+                {{ fmtMillions(value) }}
               </TableCell>
             </TableRow>
           </TableBody>
