@@ -11,7 +11,7 @@ const props = defineProps<{ ticker: string }>()
 const tickerRef = ref(props.ticker)
 watch(() => props.ticker, (v) => { tickerRef.value = v })
 
-const { messages, streaming, send, clear } = useChat(tickerRef)
+const { messages, streaming, progress, send, clear } = useChat(tickerRef)
 
 const input = ref('')
 const messagesEnd = ref<HTMLElement>()
@@ -31,7 +31,10 @@ function onKeydown(e: KeyboardEvent) {
 
 // Auto-scroll on new messages
 watch(
-  () => messages.value.length > 0 ? messages.value[messages.value.length - 1].content : '',
+  () => [
+    messages.value.length > 0 ? messages.value[messages.value.length - 1].content : '',
+    progress.value,
+  ],
   async () => {
     await nextTick()
     messagesEnd.value?.scrollIntoView({ behavior: 'smooth' })
@@ -94,10 +97,18 @@ const suggestions = [
                 class="prose prose-sm prose-slate max-w-none text-sm [&_p]:mb-2 [&_p:last-child]:mb-0 [&_code]:text-xs [&_pre]:bg-background [&_pre]:rounded [&_pre]:p-2"
                 v-html="renderMarkdown(msg.content)"
               />
-              <div v-else class="flex items-center gap-1.5">
-                <div class="h-1.5 w-1.5 rounded-full bg-muted-foreground/40 animate-bounce [animation-delay:0ms]" />
-                <div class="h-1.5 w-1.5 rounded-full bg-muted-foreground/40 animate-bounce [animation-delay:150ms]" />
-                <div class="h-1.5 w-1.5 rounded-full bg-muted-foreground/40 animate-bounce [animation-delay:300ms]" />
+              <div v-else class="space-y-2">
+                <div class="flex items-center gap-1.5">
+                  <div class="h-1.5 w-1.5 rounded-full bg-muted-foreground/40 animate-bounce [animation-delay:0ms]" />
+                  <div class="h-1.5 w-1.5 rounded-full bg-muted-foreground/40 animate-bounce [animation-delay:150ms]" />
+                  <div class="h-1.5 w-1.5 rounded-full bg-muted-foreground/40 animate-bounce [animation-delay:300ms]" />
+                </div>
+                <p
+                  v-if="streaming && idx === messages.length - 1 && progress"
+                  class="text-xs text-muted-foreground"
+                >
+                  {{ progress }}
+                </p>
               </div>
             </div>
           </template>

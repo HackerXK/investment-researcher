@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import logging
 
-from agents import Agent, ModelSettings, Runner, set_tracing_disabled
+from agents import Agent, ModelSettings, RunItemStreamEvent, Runner, set_tracing_disabled
 from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
 from fastapi.responses import StreamingResponse
 from openai import AsyncOpenAI
@@ -113,6 +113,30 @@ def build_agent() -> Agent:
 # Maximum agent turns to prevent runaway loops
 _MAX_TURNS = 15
 _FINAL_OUTPUT_CHUNK_SIZE = 96
+_INITIAL_PROGRESS = "planning the analysis"
+_TOOL_OUTPUT_PROGRESS = "analyzing the retrieved data"
+_FINAL_PROGRESS = "drafting the answer"
+
+_TOOL_PROGRESS_MESSAGES = {
+    "search_companies": "searching companies",
+    "get_company_profile": "loading company profile",
+    "list_available_tickers": "loading available tickers",
+    "get_ticker_summary": "loading financial summary",
+    "get_metrics_timeseries": "retrieving financial time series",
+    "get_metrics_pivot": "retrieving financial statements",
+    "get_growth_rates": "computing growth rates",
+    "get_cashflow_pivot": "retrieving cash flow data",
+    "get_ttm_metrics": "computing trailing-twelve-month metrics",
+    "get_quarterly_detail": "retrieving quarterly results",
+    "get_latest_ratios": "computing ratios",
+    "get_ttm_ratios": "computing ratios",
+    "get_ratios_wide": "computing ratios",
+    "get_ratio_timeseries": "computing ratio trends",
+    "list_available_ratios": "loading available ratios",
+    "compare_metric_across_companies": "comparing companies",
+    "list_filings": "searching filings",
+    "read_filing": "reading SEC filings",
+}
 
 
 def _serialize_final_output(output: object) -> str:
@@ -128,12 +152,39 @@ def _serialize_final_output(output: object) -> str:
     return str(output)
 
 
+def _sse_payload(payload: dict[str, str]) -> str:
+    """Encode a JSON SSE payload."""
+    return f"data: {json.dumps(payload)}\n\n"
+
+
+def _tool_name_from_item(item: object) -> str | None:
+    """Extract a tool name from a streamed SDK item."""
+    candidate = getattr(item, "name", None)
+    if candidate:
+        return str(candidate)
+
+    raw_item = getattr(item, "raw_item", None)
+    if isinstance(raw_item, dict):
+        candidate = raw_item.get("name") or raw_item.get("tool_name")
+    else:
+        candidate = getattr(raw_item, "name", None) or getattr(raw_item, "tool_name", None)
+
+    return str(candidate) if candidate is not None else None
+
+
+def _progress_message_for_tool(tool_name: str | None) -> str:
+    """Map a tool name to a neutral user-facing progress label."""
+    if not tool_name:
+        return "working through the analysis"
+    return _TOOL_PROGRESS_MESSAGES.get(tool_name, "working through the analysis")
+
+
 def _stream_text_as_sse(text: str):
     """Yield the final answer in frontend-compatible SSE token chunks."""
     for index in range(0, len(text), _FINAL_OUTPUT_CHUNK_SIZE):
         chunk = text[index:index + _FINAL_OUTPUT_CHUNK_SIZE]
         if chunk:
-            yield f"data: {json.dumps({'token': chunk})}\n\n"
+            yield _sse_payload({"token": chunk})
 
 
 async def handle_chat(request: ChatRequest) -> StreamingResponse:
@@ -168,24 +219,49 @@ async def handle_chat(request: ChatRequest) -> StreamingResponse:
 
     async def event_generator():
         try:
+            last_progress: str | None = None
+
+            def emit_progress(message: str):
+                nonlocal last_progress
+                if message and message != last_progress:
+                    last_progress = message
+                    return _sse_payload({"progress": message})
+                return None
+
             result = Runner.run_streamed(
                 agent,
                 input=input_items,
                 max_turns=_MAX_TURNS,
             )
+            planning_update = emit_progress(_INITIAL_PROGRESS)
+            if planning_update:
+                yield planning_update
+
             # Consume the full agent run first. Raw stream events include interim
             # planning text and tool-call chatter, which should not be exposed to
             # the user-facing chat UI.
-            async for _event in result.stream_events():
-                pass
+            async for event in result.stream_events():
+                if isinstance(event, RunItemStreamEvent):
+                    progress_update = None
+                    if event.name == "tool_called":
+                        tool_name = _tool_name_from_item(event.item)
+                        progress_update = emit_progress(_progress_message_for_tool(tool_name))
+                    elif event.name == "tool_output":
+                        progress_update = emit_progress(_TOOL_OUTPUT_PROGRESS)
+
+                    if progress_update:
+                        yield progress_update
 
             final_text = _serialize_final_output(result.final_output)
+            final_progress = emit_progress(_FINAL_PROGRESS)
+            if final_progress and final_text:
+                yield final_progress
             for sse_chunk in _stream_text_as_sse(final_text):
                 yield sse_chunk
             yield "data: [DONE]\n\n"
         except Exception as e:
             log.error("Agent streaming error: %s", e, exc_info=True)
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+            yield _sse_payload({"error": str(e)})
             yield "data: [DONE]\n\n"
 
     return StreamingResponse(

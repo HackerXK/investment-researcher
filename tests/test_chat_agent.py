@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
-from agents import FunctionTool
+from agents import FunctionTool, RunItemStreamEvent
 from httpx import ASGITransport, AsyncClient
 
 from investment_researcher.web.agent_tools import (
@@ -368,11 +368,11 @@ async def test_chat_endpoint_sse_format(client: AsyncClient):
     assert len(data_lines) > 0
     # Last data line should be [DONE]
     assert data_lines[-1] == "data: [DONE]"
-    # Other data lines should be valid JSON with 'token' or 'error' key
+    # Other data lines should be valid JSON with 'token', 'progress', or 'error' key
     for line in data_lines[:-1]:
         payload = line[6:]  # strip 'data: '
         parsed = json.loads(payload)
-        assert "token" in parsed or "error" in parsed
+        assert "token" in parsed or "progress" in parsed or "error" in parsed
 
 
 @pytest.mark.asyncio
@@ -431,8 +431,65 @@ async def test_handle_chat_streams_only_final_output(monkeypatch):
     streamed_tokens: list[str] = []
     for line in data_lines[:-1]:
         payload = json.loads(line[6:])
-        streamed_tokens.append(payload["token"])
+        if "token" in payload:
+            streamed_tokens.append(payload["token"])
 
     assert "".join(streamed_tokens) == "Final polished answer."
     assert "Let me try again" not in body
     assert "form type may be wrong" not in body
+
+
+@pytest.mark.asyncio
+async def test_handle_chat_streams_neutral_progress_updates(monkeypatch):
+    """The SSE stream should include neutral progress updates derived from tool events."""
+
+    class FakeRunResult:
+        def __init__(self):
+            self.final_output = "Final polished answer."
+
+        async def stream_events(self):
+            yield RunItemStreamEvent(
+                name="tool_called",
+                item=SimpleNamespace(name="list_filings", raw_item=SimpleNamespace(name="list_filings")),
+            )
+            yield RunItemStreamEvent(
+                name="tool_output",
+                item=SimpleNamespace(output='[{"accession_number": "123"}]'),
+            )
+            yield RunItemStreamEvent(
+                name="tool_called",
+                item=SimpleNamespace(name="get_ttm_ratios", raw_item=SimpleNamespace(name="get_ttm_ratios")),
+            )
+
+    def fake_run_streamed(*args, **kwargs):
+        return FakeRunResult()
+
+    monkeypatch.setattr(chat_module, "build_agent", lambda: object())
+    monkeypatch.setattr(chat_module.Runner, "run_streamed", fake_run_streamed)
+
+    response = await chat_module.handle_chat(ChatRequest(message="hello", ticker="AAPL"))
+
+    chunks: list[str] = []
+    async for chunk in response.body_iterator:
+        chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
+
+    body = "".join(chunks)
+    data_lines = [line for line in body.split("\n") if line.startswith("data: ")]
+
+    progress_messages: list[str] = []
+    token_messages: list[str] = []
+    for line in data_lines[:-1]:
+        payload = json.loads(line[6:])
+        if "progress" in payload:
+            progress_messages.append(payload["progress"])
+        if "token" in payload:
+            token_messages.append(payload["token"])
+
+    assert progress_messages[:4] == [
+        "planning the analysis",
+        "searching filings",
+        "analyzing the retrieved data",
+        "computing ratios",
+    ]
+    assert progress_messages[-1] == "drafting the answer"
+    assert "".join(token_messages) == "Final polished answer."
