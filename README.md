@@ -3,11 +3,12 @@
 Investment Researcher is a local SEC ingestion pipeline plus financial research platform.
 It downloads SEC filing data via [edgartools](https://github.com/dgunning/edgartools), stores raw filings on disk, writes normalized financial metrics into DuckDB, computes on-the-fly ratios and TTM metrics, and serves scheduled Prefect flows for ongoing updates.
 
-Three main workflows:
+Four main workflows:
 
 - Run the long-lived ingestion service with Docker Compose.
 - Develop and test the ingestion and ratio code locally.
 - Explore the populated DuckDB database with the multi-tab Streamlit analytics dashboard.
+- Chat with an AI financial analyst powered by the OpenAI Agents SDK that can autonomously query financials, compute ratios, and read SEC filings.
 
 ## Architecture
 
@@ -20,6 +21,13 @@ Three main workflows:
 
 - `metrics.py` aggregates Trailing Twelve Months (TTM) metrics and derives computed values (EBITDA, FCF, gross profit, etc.).
 - `ratios.py` computes ~46 financial ratios across 8 categories (profitability, returns, liquidity, leverage, efficiency, cash flow, per-share, other) entirely on-the-fly from DuckDB — ratios are never stored.
+
+**Agentic chat** — an AI financial analyst that can autonomously plan and execute multi-step analyses:
+
+- Built with the [OpenAI Agents SDK](https://github.com/openai/openai-agents-python) using `OpenAIChatCompletionsModel` for compatibility with local vLLM / any OpenAI-compatible endpoint.
+- The agent has 18 tools wrapping the full analytics surface: company search, metric pivots, growth rates, TTM metrics, quarterly detail, ~46 financial ratios, cashflow analysis, cross-company comparison, and SEC filing retrieval/reading.
+- Streams responses via SSE (`data: {"token": "..."}` / `data: [DONE]`) to the Nuxt 3 frontend chat panel.
+- Tracing is disabled by default (no OpenAI platform key needed).
 
 **Service startup** sequence:
 
@@ -274,6 +282,52 @@ streamlit run src/investment_researcher/demo/app.py
 | Growth & Margins | YoY revenue and earnings growth, profitability margins trends, earnings quality (net income vs. OCF) |
 | Quarterly Detail | Discrete 10-quarter breakdown with a TTM summary column |
 
+## Agentic Chat
+
+The chat backend uses the [OpenAI Agents SDK](https://github.com/openai/openai-agents-python) to create a **Financial Analyst** agent that autonomously plans and executes multi-step analyses. Instead of stuffing a fixed context window, the agent decides which tools to call, retrieves only the data it needs, and synthesises a quantitative answer.
+
+### How it works
+
+1. The user sends a question via the Nuxt 3 frontend chat panel (or the `/api/chat` REST endpoint).
+2. The backend constructs an `Agent` with 18 tools wrapping the full analytics surface.
+3. `Runner.run_streamed()` lets the agent plan tool calls, execute them, and stream the final response token-by-token via SSE.
+4. The frontend renders tokens incrementally — same SSE format as before (`data: {"token": "..."}` / `data: [DONE]`).
+
+### Available tools
+
+| Tool | Description |
+|------|-------------|
+| `search_companies` | Full-text search across known companies |
+| `get_company_profile` | Company profile (name, sector, industry, CIK, SIC) |
+| `list_available_tickers` | All tickers with data in DuckDB |
+| `get_ticker_summary` | High-level financial summary for a ticker |
+| `get_metrics_timeseries` | Time-series for specific metrics |
+| `get_metrics_pivot` | Multi-metric pivot table (periods as columns) |
+| `get_growth_rates` | Year-over-year growth rates |
+| `get_cashflow_pivot` | Full cash flow statement pivot |
+| `get_ttm_metrics` | Trailing Twelve Months aggregated metrics |
+| `get_quarterly_detail` | Recent quarterly breakdown |
+| `get_latest_ratios` | Latest-period financial ratios |
+| `get_ttm_ratios` | TTM financial ratios |
+| `get_ratios_wide` | Multi-period ratio table |
+| `get_ratio_timeseries` | Historical time-series for a single ratio |
+| `list_available_ratios` | All ~46 ratios grouped by category |
+| `compare_metric_across_companies` | Cross-company metric comparison |
+| `list_filings` | Discover SEC filings by type (10-K, 10-Q, 8-K, etc.) |
+| `read_filing` | Read full text of any SEC filing by accession number |
+
+### Configuration
+
+Set three environment variables (see [Environment Variables](#environment-variables)):
+
+```bash
+LLM_API_BASE=http://localhost:8000/v1   # your vLLM or OpenAI-compatible endpoint
+LLM_MODEL=Qwen/Qwen2.5-32B-Instruct    # model name
+LLM_API_KEY=EMPTY                        # API key (EMPTY for local vLLM)
+```
+
+The agent uses `OpenAIChatCompletionsModel` (not the Responses API), so it works with any OpenAI-compatible endpoint including vLLM, Ollama, and llama.cpp.
+
 ## Financial Ratios & TTM Metrics
 
 Ratios and TTM metrics are computed on-the-fly from DuckDB — they are never persisted separately.
@@ -374,6 +428,9 @@ Each data store has a `_HOST_SOURCE` variable (Docker bind mount source on the h
 | `EDGAR_RAW_FILING_TICKERS` | top-10 tickers | Raw filing download scope (see [Raw filing scope](#2-raw-filing-scope)) |
 | `FORCE_SEED` | `false` | Set `true` to force seed flow on the next startup |
 | `FMP_API_KEY` | — | Financial Modeling Prep API key (golden-data scripts only) |
+| `LLM_API_BASE` | `http://localhost:8000/v1` | OpenAI-compatible Chat Completions endpoint for the agentic chat |
+| `LLM_MODEL` | `Qwen/Qwen2.5-32B-Instruct` | Model name to pass to the Chat Completions endpoint |
+| `LLM_API_KEY` | `EMPTY` | API key for the LLM endpoint (set `EMPTY` for local vLLM) |
 
 ## Project Structure
 
@@ -390,6 +447,10 @@ Each data store has a `_HOST_SOURCE` variable (Docker bind mount source on the h
 │   ├── metrics.py                  # TTM aggregation and derived metrics
 │   ├── ratios.py                   # ~46-ratio registry and on-the-fly computation
 │   ├── service.py                  # Auto-seed then serve Prefect deployments
+│   ├── web/
+│   │   ├── app.py                  # FastAPI REST API + chat endpoint
+│   │   ├── chat.py                 # Agentic chat — Agent + Runner streaming
+│   │   └── agent_tools.py          # 18 @function_tool wrappers for analytics
 │   ├── demo/
 │   │   ├── app.py                  # 7-tab Streamlit analytics dashboard
 │   │   └── data.py                 # DuckDB query helpers for the dashboard
