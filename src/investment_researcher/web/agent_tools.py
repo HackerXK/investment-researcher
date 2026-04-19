@@ -20,6 +20,7 @@ from investment_researcher.analytics import (
     get_company_profile as _get_company_profile,
     get_filings_list as _get_filings_list,
     get_filing_text as _get_filing_text,
+    get_insider_trades as _get_insider_trades,
     get_ratios_by_category,
     get_ratios_latest as _get_ratios_latest,
     get_ratios_ttm as _get_ratios_ttm,
@@ -323,6 +324,9 @@ def list_filings(
     ticker: str,
     form_type: str | None = None,
     limit: int = 25,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    include_amendments: bool = True,
 ) -> str:
     """List SEC filings for a company. Returns accession_number, form_type,
     filing_date, and description for each filing.
@@ -334,8 +338,18 @@ def list_filings(
         ticker: Stock ticker symbol.
         form_type: Optional filter by form type (e.g. "10-K", "10-Q", "8-K").
         limit: Maximum number of filings to return.
+        start_date: Optional earliest filing date (YYYY-MM-DD).
+        end_date: Optional latest filing date (YYYY-MM-DD).
+        include_amendments: Whether to include amended forms like 4/A.
     """
-    results = _get_filings_list(ticker, form_type, limit)
+    results = _get_filings_list(
+        ticker,
+        form_type,
+        limit,
+        start_date,
+        end_date,
+        include_amendments,
+    )
     return json.dumps(results, default=str)
 
 
@@ -356,6 +370,51 @@ def read_filing(ticker: str, accession_number: str) -> str:
     if len(text) > _MAX_FILING_CHARS:
         text = text[:_MAX_FILING_CHARS] + "\n\n[... filing text truncated ...]"
     return text
+
+
+@function_tool
+def get_insider_trades(
+    ticker: str,
+    start_date: str,
+    end_date: str,
+    transaction_codes: list[str] | None = None,
+    acquired_disposed: str | None = "D",
+    min_value: float = 0.0,
+    limit: int = 200,
+    include_amendments: bool = False,
+) -> str:
+    """Return structured Form 4 insider transactions for a date range.
+
+    This is the preferred tool for insider-trading questions because it returns
+    structured rows with accession number, insider, transaction date, code,
+    shares, price, proceeds/value, and a Normal/Notable/Very notable bucket.
+
+    Examples:
+    - Use transaction_codes=["S", "F"] to capture discretionary sales plus tax withholding.
+    - Use transaction_codes=["S"] to isolate discretionary open-market sales.
+    - Use acquired_disposed="A" for acquisitions instead of dispositions.
+
+    Args:
+        ticker: Stock ticker symbol.
+        start_date: Earliest filing date, inclusive (YYYY-MM-DD).
+        end_date: Latest filing date, inclusive (YYYY-MM-DD).
+        transaction_codes: Optional Form 4 transaction codes to include (e.g. ["S", "F"]).
+        acquired_disposed: Optional acquisition/disposition filter: "A", "D", or None.
+        min_value: Minimum absolute transaction value/proceeds in dollars.
+        limit: Maximum number of transaction rows to return.
+        include_amendments: Whether to include amended forms like 4/A.
+    """
+    results = _get_insider_trades(
+        ticker=ticker,
+        start_date=start_date,
+        end_date=end_date,
+        transaction_codes=transaction_codes,
+        acquired_disposed=acquired_disposed,
+        min_value=min_value,
+        limit=limit,
+        include_amendments=include_amendments,
+    )
+    return json.dumps(results, default=str)
 
 
 @function_tool
@@ -394,4 +453,5 @@ ALL_TOOLS = [
     # SEC filings
     list_filings,
     read_filing,
+    get_insider_trades,
 ]

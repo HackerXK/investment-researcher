@@ -71,7 +71,30 @@ __all__ = [
     # Filing access
     "get_filings_list",
     "get_filing_text",
+    "get_insider_trades",
 ]
+
+
+_FORM4_CODE_DESCRIPTIONS = {
+    "P": "Open Market Purchase",
+    "S": "Open Market Sale",
+    "A": "Grant/Award",
+    "M": "Option Exercise",
+    "F": "Tax Withholding",
+    "G": "Gift",
+    "X": "Option Exercise",
+    "D": "Disposition to Issuer",
+    "C": "Conversion",
+    "E": "Expiration of Short Position",
+    "H": "Expiration of Long Position",
+    "I": "Discretionary Transaction",
+    "O": "Exercise of Out-of-Money Derivative",
+    "U": "Disposition (Tender of Shares)",
+    "Z": "Deposit/Withdrawal (Voting Trust)",
+}
+
+_NOTABLE_TRADE_VALUE = 100_000.0
+_VERY_NOTABLE_TRADE_VALUE = 1_000_000.0
 
 
 # ---------------------------------------------------------------------------
@@ -172,6 +195,9 @@ def get_filings_list(
     ticker: str,
     form_type: str | None = None,
     limit: int = 25,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    include_amendments: bool = True,
 ) -> list[dict[str, Any]]:
     """Return recent filings for *ticker* as a list of dicts.
 
@@ -182,9 +208,13 @@ def get_filings_list(
         from edgar import Company as EdgarCompany
 
         co = EdgarCompany(ticker.upper())
-        filings = co.get_filings()
-        if form_type:
-            filings = filings.filter(form=form_type)
+        filings = co.get_filings(
+            form=form_type,
+            filing_date=_build_filing_date_filter(start_date, end_date),
+            amendments=include_amendments,
+        )
+        if filings is None:
+            return []
         result: list[dict[str, Any]] = []
         for f in filings[:limit]:
             result.append(
@@ -200,6 +230,46 @@ def get_filings_list(
     except Exception:
         log.warning("Could not list filings for %s", ticker, exc_info=True)
         return []
+
+
+def _build_filing_date_filter(
+    start_date: str | None,
+    end_date: str | None,
+) -> str | None:
+    """Build an edgartools-compatible filing date filter."""
+    if start_date and end_date:
+        return f"{start_date}:{end_date}"
+    if start_date:
+        return f"{start_date}:"
+    if end_date:
+        return f":{end_date}"
+    return None
+
+
+def _normalize_number(value: Any) -> int | float | None:
+    """Convert pandas / Python numeric-like values to JSON-safe numbers."""
+    if value is None:
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if pd.isna(numeric):
+        return None
+    if numeric.is_integer():
+        return int(numeric)
+    return numeric
+
+
+def _classify_trade_significance(value: Any) -> str:
+    """Bucket a trade's value for quick screening."""
+    numeric = _normalize_number(value)
+    magnitude = abs(float(numeric)) if numeric is not None else 0.0
+    if magnitude < _NOTABLE_TRADE_VALUE:
+        return "Normal"
+    if magnitude < _VERY_NOTABLE_TRADE_VALUE:
+        return "Notable"
+    return "Very notable"
 
 
 def get_filing_text(ticker: str, accession_number: str) -> str:
@@ -226,3 +296,128 @@ def get_filing_text(ticker: str, accession_number: str) -> str:
             exc_info=True,
         )
         return ""
+
+
+def get_insider_trades(
+    ticker: str,
+    start_date: str,
+    end_date: str,
+    transaction_codes: list[str] | None = None,
+    acquired_disposed: str | None = "D",
+    min_value: float = 0.0,
+    limit: int = 200,
+    include_amendments: bool = False,
+) -> list[dict[str, Any]]:
+    """Return structured Form 4 transactions for a date range.
+
+    This is the preferred interface for insider-trading questions because it
+    returns transaction-level fields directly instead of forcing the agent to
+    iterate through raw filing markdown.
+
+    Typical sell screens use ``transaction_codes=["S", "F"]`` and
+    ``acquired_disposed="D"`` to capture discretionary sales plus tax
+    withholding dispositions.
+    """
+    try:
+        from edgar import Company as EdgarCompany
+
+        co = EdgarCompany(ticker.upper())
+        filings = co.get_filings(
+            form="4",
+            filing_date=_build_filing_date_filter(start_date, end_date),
+            amendments=include_amendments,
+        )
+        if filings is None:
+            return []
+
+        normalized_codes = (
+            {code.strip().upper() for code in transaction_codes if code and code.strip()}
+            if transaction_codes
+            else None
+        )
+        normalized_acquired_disposed = acquired_disposed.upper() if acquired_disposed else None
+
+        trades: list[dict[str, Any]] = []
+        for filing in filings:
+            try:
+                form4 = filing.obj()
+                if form4 is None:
+                    continue
+                summary = form4.get_ownership_summary()
+                tx_df = form4.non_derivative_table.transactions.data
+                if tx_df is None or tx_df.empty:
+                    continue
+
+                if normalized_acquired_disposed:
+                    tx_df = tx_df[tx_df["AcquiredDisposed"] == normalized_acquired_disposed]
+                if normalized_codes:
+                    tx_df = tx_df[tx_df["Code"].isin(normalized_codes)]
+                if tx_df.empty:
+                    continue
+
+                for row in tx_df.itertuples(index=False):
+                    shares = _normalize_number(getattr(row, "Shares", None))
+                    price = _normalize_number(getattr(row, "Price", None))
+                    value = (
+                        _normalize_number(float(shares) * float(price))
+                        if shares is not None and price is not None
+                        else None
+                    )
+                    if value is not None and abs(float(value)) < min_value:
+                        continue
+
+                    code = str(getattr(row, "Code", "") or "")
+                    acquired_disposed_code = str(getattr(row, "AcquiredDisposed", "") or "")
+                    trades.append(
+                        {
+                            "accession_number": getattr(filing, "accession_no", None),
+                            "filing_date": str(getattr(filing, "filing_date", "") or ""),
+                            "tx_date": str(getattr(row, "Date", "") or ""),
+                            "insider_name": getattr(summary, "insider_name", None),
+                            "position": getattr(summary, "position", None),
+                            "transaction_code": code,
+                            "transaction_type": str(getattr(row, "TransactionType", "") or ""),
+                            "code_description": _FORM4_CODE_DESCRIPTIONS.get(
+                                code,
+                                f"Other ({code})" if code else "Other",
+                            ),
+                            "acquired_disposed": acquired_disposed_code,
+                            "shares": shares,
+                            "price": price,
+                            "proceeds": value if acquired_disposed_code == "D" else None,
+                            "value": value,
+                            "remaining_shares": _normalize_number(getattr(row, "Remaining", None)),
+                            "security": getattr(row, "Security", None),
+                            "is_direct": getattr(row, "DirectIndirect", None) == "D",
+                            "ownership_nature": getattr(row, "NatureOfOwnership", None),
+                            "primary_activity": getattr(summary, "primary_activity", None),
+                            "classification": _classify_trade_significance(value),
+                            "is_tax_withholding": code == "F",
+                        }
+                    )
+            except Exception:
+                log.warning(
+                    "Could not parse Form 4 for %s / %s",
+                    ticker,
+                    getattr(filing, "accession_no", None),
+                    exc_info=True,
+                )
+
+        trades.sort(
+            key=lambda trade: (
+                float(trade["proceeds"] or trade["value"] or 0.0),
+                str(trade["tx_date"] or trade["filing_date"] or ""),
+                str(trade["accession_number"] or ""),
+            ),
+            reverse=True,
+        )
+        return trades[:limit]
+    except Exception:
+        log.warning(
+            "Could not retrieve insider trades for %s from %s to %s",
+            ticker,
+            start_date,
+            end_date,
+            exc_info=True,
+        )
+        return []

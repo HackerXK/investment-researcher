@@ -25,7 +25,7 @@ Four main workflows:
 **Agentic chat** — an AI financial analyst that can autonomously plan and execute multi-step analyses:
 
 - Built with the [OpenAI Agents SDK](https://github.com/openai/openai-agents-python) using `OpenAIChatCompletionsModel` for compatibility with local vLLM / any OpenAI-compatible endpoint.
-- The agent has 18 tools wrapping the full analytics surface: company search, metric pivots, growth rates, TTM metrics, quarterly detail, ~46 financial ratios, cashflow analysis, cross-company comparison, and SEC filing retrieval/reading.
+- The agent has 19 tools wrapping the full analytics surface: company search, metric pivots, growth rates, TTM metrics, quarterly detail, ~46 financial ratios, cashflow analysis, cross-company comparison, SEC filing retrieval/reading, and structured Form 4 insider-trade analysis.
 - Streams responses via SSE (`data: {"token": "..."}` / `data: [DONE]`) to the Nuxt 3 frontend chat panel.
 - Tracing is disabled by default (no OpenAI platform key needed).
 
@@ -289,7 +289,7 @@ The chat backend uses the [OpenAI Agents SDK](https://github.com/openai/openai-a
 ### How it works
 
 1. The user sends a question via the Nuxt 3 frontend chat panel (or the `/api/chat` REST endpoint).
-2. The backend constructs an `Agent` with 18 tools wrapping the full analytics surface.
+2. The backend constructs an `Agent` with 19 tools wrapping the full analytics surface.
 3. `Runner.run_streamed()` lets the agent plan tool calls, execute them, and stream the final response token-by-token via SSE.
 4. The frontend renders tokens incrementally — same SSE format as before (`data: {"token": "..."}` / `data: [DONE]`).
 
@@ -315,6 +315,7 @@ The chat backend uses the [OpenAI Agents SDK](https://github.com/openai/openai-a
 | `compare_metric_across_companies` | Cross-company metric comparison |
 | `list_filings` | Discover SEC filings by type (10-K, 10-Q, 8-K, etc.) |
 | `read_filing` | Read full text of any SEC filing by accession number |
+| `get_insider_trades` | Structured Form 4 transactions across a date range, including insider, tx date, code, shares, proceeds, and significance bucket |
 
 ### Configuration
 

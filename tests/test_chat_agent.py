@@ -23,6 +23,7 @@ from investment_researcher.web.agent_tools import (
     get_cashflow_pivot,
     get_company_profile,
     get_growth_rates,
+    get_insider_trades,
     get_latest_ratios,
     get_metrics_pivot,
     get_metrics_timeseries,
@@ -83,6 +84,7 @@ class TestAgentConstruction:
             "compare_metric_across_companies",
             "list_filings",
             "read_filing",
+            "get_insider_trades",
         }
         assert tool_names == expected
 
@@ -274,12 +276,24 @@ class TestToolSchemas:
         assert "ticker" in props
         assert "form_type" in props
         assert "limit" in props
+        assert "start_date" in props
+        assert "end_date" in props
 
     def test_read_filing_schema(self):
         tool = self._get_tool_by_name("read_filing")
         props = tool.params_json_schema.get("properties", {})
         assert "ticker" in props
         assert "accession_number" in props
+
+    def test_get_insider_trades_schema(self):
+        tool = self._get_tool_by_name("get_insider_trades")
+        props = tool.params_json_schema.get("properties", {})
+        assert "ticker" in props
+        assert "start_date" in props
+        assert "end_date" in props
+        assert "transaction_codes" in props
+        assert "acquired_disposed" in props
+        assert "min_value" in props
 
     def test_compare_metric_schema(self):
         tool = self._get_tool_by_name("compare_metric_across_companies")

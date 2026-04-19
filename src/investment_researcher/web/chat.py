@@ -76,6 +76,9 @@ call multiple tools if the question spans several companies or data types.
 - You can read ANY SEC filing type (10-K, 10-Q, 8-K, DEF 14A, etc.), not \
   just the latest 10-K.  Use list_filings to discover available filings, \
   then read_filing to read them.
+- For insider trading / Form 4 questions, prefer get_insider_trades with an
+    explicit date range instead of relying on only the most recent list_filings
+    window.
 
 ## Available metric names (not exhaustive)
 revenue, net_income, gross_profit, operating_income, ebitda, total_assets, \
@@ -136,6 +139,7 @@ _TOOL_PROGRESS_MESSAGES = {
     "compare_metric_across_companies": "comparing companies",
     "list_filings": "searching filings",
     "read_filing": "reading SEC filings",
+    "get_insider_trades": "analyzing insider trades",
 }
 
 
