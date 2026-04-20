@@ -22,11 +22,14 @@ from investment_researcher.web.agent_tools import (
     compare_metric_across_companies,
     get_cashflow_pivot,
     get_company_profile,
+    get_institutional_holdings,
     get_growth_rates,
     get_insider_trades,
     get_latest_ratios,
+    get_material_events,
     get_metrics_pivot,
     get_metrics_timeseries,
+    get_proxy_statement_data,
     get_quarterly_detail,
     get_ratio_timeseries,
     get_ratios_wide,
@@ -38,6 +41,10 @@ from investment_researcher.web.agent_tools import (
     list_filings,
     read_filing,
     search_companies,
+    summarize_insider_sells,
+    summarize_institutional_holdings,
+    summarize_material_events,
+    summarize_proxy_statement,
 )
 from investment_researcher.web import chat as chat_module
 from investment_researcher.web.chat import ChatMessage, ChatRequest, build_agent
@@ -85,6 +92,13 @@ class TestAgentConstruction:
             "list_filings",
             "read_filing",
             "get_insider_trades",
+            "summarize_insider_sells",
+            "get_material_events",
+            "summarize_material_events",
+            "get_proxy_statement_data",
+            "summarize_proxy_statement",
+            "get_institutional_holdings",
+            "summarize_institutional_holdings",
         }
         assert tool_names == expected
 

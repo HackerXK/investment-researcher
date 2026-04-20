@@ -79,6 +79,13 @@ call multiple tools if the question spans several companies or data types.
 - For insider trading / Form 4 questions, prefer get_insider_trades with an
     explicit date range instead of relying on only the most recent list_filings
     window.
+- For grouped Form 4 sell screens, prefer summarize_insider_sells.
+- For 8-K questions about item codes or recent material events, prefer
+    get_material_events or summarize_material_events before reading raw filing text.
+- For DEF 14A compensation questions, prefer get_proxy_statement_data or
+    summarize_proxy_statement before reading raw proxy text.
+- For 13F institutional holding questions, prefer get_institutional_holdings or
+    summarize_institutional_holdings.
 
 ## Available metric names (not exhaustive)
 revenue, net_income, gross_profit, operating_income, ebitda, total_assets, \
@@ -140,6 +147,13 @@ _TOOL_PROGRESS_MESSAGES = {
     "list_filings": "searching filings",
     "read_filing": "reading SEC filings",
     "get_insider_trades": "analyzing insider trades",
+    "summarize_insider_sells": "summarizing insider sales",
+    "get_material_events": "analyzing 8-K events",
+    "summarize_material_events": "summarizing 8-K events",
+    "get_proxy_statement_data": "analyzing proxy statements",
+    "summarize_proxy_statement": "summarizing proxy statements",
+    "get_institutional_holdings": "analyzing institutional holdings",
+    "summarize_institutional_holdings": "summarizing institutional holdings",
 }
 
 

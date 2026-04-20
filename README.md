@@ -289,7 +289,7 @@ The chat backend uses the [OpenAI Agents SDK](https://github.com/openai/openai-a
 ### How it works
 
 1. The user sends a question via the Nuxt 3 frontend chat panel (or the `/api/chat` REST endpoint).
-2. The backend constructs an `Agent` with 19 tools wrapping the full analytics surface.
+2. The backend constructs an `Agent` with 26 tools wrapping the full analytics surface.
 3. `Runner.run_streamed()` lets the agent plan tool calls, execute them, and stream the final response token-by-token via SSE.
 4. The frontend renders tokens incrementally — same SSE format as before (`data: {"token": "..."}` / `data: [DONE]`).
 
@@ -316,6 +316,13 @@ The chat backend uses the [OpenAI Agents SDK](https://github.com/openai/openai-a
 | `list_filings` | Discover SEC filings by type (10-K, 10-Q, 8-K, etc.) |
 | `read_filing` | Read full text of any SEC filing by accession number |
 | `get_insider_trades` | Structured Form 4 transactions across a date range, including insider, tx date, code, shares, proceeds, and significance bucket |
+| `summarize_insider_sells` | Grouped Form 4 sell summaries by insider or transaction code |
+| `get_material_events` | Structured 8-K event rows with item codes and excerpts |
+| `summarize_material_events` | Grouped summaries of 8-K event activity by item code or content type |
+| `get_proxy_statement_data` | Structured DEF 14A snapshots including CEO comp and pay-vs-performance fields |
+| `summarize_proxy_statement` | High-level summary across recent proxy statement filings |
+| `get_institutional_holdings` | Structured holdings from a manager's selected 13F filing |
+| `summarize_institutional_holdings` | Concentration-oriented summary of a manager's 13F portfolio |
 
 ### Configuration
 

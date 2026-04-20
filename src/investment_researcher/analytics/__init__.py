@@ -37,6 +37,19 @@ from investment_researcher.ratios import (
     RATIO_REGISTRY,
     get_ratios_by_category,
 )
+from investment_researcher.analytics.sec_filings import (
+    build_filing_date_filter as _build_filing_date_filter_impl,
+    classify_trade_significance as _classify_trade_significance_impl,
+    extract_form4_trades,
+    extract_institutional_holdings,
+    extract_material_events,
+    extract_proxy_statement_record,
+    normalize_number as _normalize_number_impl,
+    summarize_insider_sales_rows,
+    summarize_institutional_holdings_rows,
+    summarize_material_event_rows,
+    summarize_proxy_statement_rows,
+)
 
 log = logging.getLogger(__name__)
 
@@ -72,29 +85,14 @@ __all__ = [
     "get_filings_list",
     "get_filing_text",
     "get_insider_trades",
+    "summarize_insider_sells",
+    "get_material_events",
+    "summarize_material_events",
+    "get_proxy_statement_data",
+    "summarize_proxy_statement",
+    "get_institutional_holdings",
+    "summarize_institutional_holdings",
 ]
-
-
-_FORM4_CODE_DESCRIPTIONS = {
-    "P": "Open Market Purchase",
-    "S": "Open Market Sale",
-    "A": "Grant/Award",
-    "M": "Option Exercise",
-    "F": "Tax Withholding",
-    "G": "Gift",
-    "X": "Option Exercise",
-    "D": "Disposition to Issuer",
-    "C": "Conversion",
-    "E": "Expiration of Short Position",
-    "H": "Expiration of Long Position",
-    "I": "Discretionary Transaction",
-    "O": "Exercise of Out-of-Money Derivative",
-    "U": "Disposition (Tender of Shares)",
-    "Z": "Deposit/Withdrawal (Voting Trust)",
-}
-
-_NOTABLE_TRADE_VALUE = 100_000.0
-_VERY_NOTABLE_TRADE_VALUE = 1_000_000.0
 
 
 # ---------------------------------------------------------------------------
@@ -237,39 +235,17 @@ def _build_filing_date_filter(
     end_date: str | None,
 ) -> str | None:
     """Build an edgartools-compatible filing date filter."""
-    if start_date and end_date:
-        return f"{start_date}:{end_date}"
-    if start_date:
-        return f"{start_date}:"
-    if end_date:
-        return f":{end_date}"
-    return None
+    return _build_filing_date_filter_impl(start_date, end_date)
 
 
 def _normalize_number(value: Any) -> int | float | None:
     """Convert pandas / Python numeric-like values to JSON-safe numbers."""
-    if value is None:
-        return None
-    try:
-        numeric = float(value)
-    except (TypeError, ValueError):
-        return None
-    if pd.isna(numeric):
-        return None
-    if numeric.is_integer():
-        return int(numeric)
-    return numeric
+    return _normalize_number_impl(value)
 
 
 def _classify_trade_significance(value: Any) -> str:
     """Bucket a trade's value for quick screening."""
-    numeric = _normalize_number(value)
-    magnitude = abs(float(numeric)) if numeric is not None else 0.0
-    if magnitude < _NOTABLE_TRADE_VALUE:
-        return "Normal"
-    if magnitude < _VERY_NOTABLE_TRADE_VALUE:
-        return "Notable"
-    return "Very notable"
+    return _classify_trade_significance_impl(value)
 
 
 def get_filing_text(ticker: str, accession_number: str) -> str:
@@ -329,72 +305,17 @@ def get_insider_trades(
         )
         if filings is None:
             return []
-
-        normalized_codes = (
-            {code.strip().upper() for code in transaction_codes if code and code.strip()}
-            if transaction_codes
-            else None
-        )
-        normalized_acquired_disposed = acquired_disposed.upper() if acquired_disposed else None
-
         trades: list[dict[str, Any]] = []
         for filing in filings:
             try:
-                form4 = filing.obj()
-                if form4 is None:
-                    continue
-                summary = form4.get_ownership_summary()
-                tx_df = form4.non_derivative_table.transactions.data
-                if tx_df is None or tx_df.empty:
-                    continue
-
-                if normalized_acquired_disposed:
-                    tx_df = tx_df[tx_df["AcquiredDisposed"] == normalized_acquired_disposed]
-                if normalized_codes:
-                    tx_df = tx_df[tx_df["Code"].isin(normalized_codes)]
-                if tx_df.empty:
-                    continue
-
-                for row in tx_df.itertuples(index=False):
-                    shares = _normalize_number(getattr(row, "Shares", None))
-                    price = _normalize_number(getattr(row, "Price", None))
-                    value = (
-                        _normalize_number(float(shares) * float(price))
-                        if shares is not None and price is not None
-                        else None
+                trades.extend(
+                    extract_form4_trades(
+                        filing,
+                        transaction_codes=transaction_codes,
+                        acquired_disposed=acquired_disposed,
+                        min_value=min_value,
                     )
-                    if value is not None and abs(float(value)) < min_value:
-                        continue
-
-                    code = str(getattr(row, "Code", "") or "")
-                    acquired_disposed_code = str(getattr(row, "AcquiredDisposed", "") or "")
-                    trades.append(
-                        {
-                            "accession_number": getattr(filing, "accession_no", None),
-                            "filing_date": str(getattr(filing, "filing_date", "") or ""),
-                            "tx_date": str(getattr(row, "Date", "") or ""),
-                            "insider_name": getattr(summary, "insider_name", None),
-                            "position": getattr(summary, "position", None),
-                            "transaction_code": code,
-                            "transaction_type": str(getattr(row, "TransactionType", "") or ""),
-                            "code_description": _FORM4_CODE_DESCRIPTIONS.get(
-                                code,
-                                f"Other ({code})" if code else "Other",
-                            ),
-                            "acquired_disposed": acquired_disposed_code,
-                            "shares": shares,
-                            "price": price,
-                            "proceeds": value if acquired_disposed_code == "D" else None,
-                            "value": value,
-                            "remaining_shares": _normalize_number(getattr(row, "Remaining", None)),
-                            "security": getattr(row, "Security", None),
-                            "is_direct": getattr(row, "DirectIndirect", None) == "D",
-                            "ownership_nature": getattr(row, "NatureOfOwnership", None),
-                            "primary_activity": getattr(summary, "primary_activity", None),
-                            "classification": _classify_trade_significance(value),
-                            "is_tax_withholding": code == "F",
-                        }
-                    )
+                )
             except Exception:
                 log.warning(
                     "Could not parse Form 4 for %s / %s",
@@ -421,3 +342,250 @@ def get_insider_trades(
             exc_info=True,
         )
         return []
+
+
+def summarize_insider_sells(
+    ticker: str,
+    start_date: str,
+    end_date: str,
+    transaction_codes: list[str] | None = None,
+    min_value: float = 0.0,
+    group_by: str = "insider_name",
+    limit: int = 25,
+    include_amendments: bool = False,
+) -> list[dict[str, Any]]:
+    """Return grouped summaries for Form 4 sale/disposition activity."""
+    trades = get_insider_trades(
+        ticker=ticker,
+        start_date=start_date,
+        end_date=end_date,
+        transaction_codes=transaction_codes or ["S", "F"],
+        acquired_disposed="D",
+        min_value=min_value,
+        limit=500,
+        include_amendments=include_amendments,
+    )
+    return summarize_insider_sales_rows(trades, group_by=group_by, limit=limit)
+
+
+def get_material_events(
+    ticker: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    item_codes: list[str] | None = None,
+    limit: int = 50,
+    include_amendments: bool = False,
+    summary_chars: int = 400,
+) -> list[dict[str, Any]]:
+    """Return structured 8-K item/event rows for a company."""
+    try:
+        from edgar import Company as EdgarCompany
+
+        co = EdgarCompany(ticker.upper())
+        filings = co.get_filings(
+            form="8-K",
+            filing_date=_build_filing_date_filter(start_date, end_date),
+            amendments=include_amendments,
+        )
+        if filings is None:
+            return []
+
+        events: list[dict[str, Any]] = []
+        for filing in filings:
+            try:
+                events.extend(
+                    extract_material_events(
+                        filing,
+                        item_codes=item_codes,
+                        summary_chars=summary_chars,
+                    )
+                )
+                if len(events) >= limit:
+                    break
+            except Exception:
+                log.warning(
+                    "Could not parse 8-K for %s / %s",
+                    ticker,
+                    getattr(filing, "accession_no", None),
+                    exc_info=True,
+                )
+
+        return events[:limit]
+    except Exception:
+        log.warning(
+            "Could not retrieve 8-K material events for %s",
+            ticker,
+            exc_info=True,
+        )
+        return []
+
+
+def summarize_material_events(
+    ticker: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    item_codes: list[str] | None = None,
+    group_by: str = "item_code",
+    limit: int = 25,
+    include_amendments: bool = False,
+    summary_chars: int = 400,
+) -> list[dict[str, Any]]:
+    """Return grouped summaries of a company's 8-K material events."""
+    events = get_material_events(
+        ticker=ticker,
+        start_date=start_date,
+        end_date=end_date,
+        item_codes=item_codes,
+        limit=500,
+        include_amendments=include_amendments,
+        summary_chars=summary_chars,
+    )
+    return summarize_material_event_rows(events, group_by=group_by, limit=limit)
+
+
+def get_proxy_statement_data(
+    ticker: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    limit: int = 5,
+    include_amendments: bool = False,
+) -> list[dict[str, Any]]:
+    """Return structured DEF 14A snapshots for one or more filings."""
+    try:
+        from edgar import Company as EdgarCompany
+
+        co = EdgarCompany(ticker.upper())
+        filings = co.get_filings(
+            form="DEF 14A",
+            filing_date=_build_filing_date_filter(start_date, end_date),
+            amendments=include_amendments,
+        )
+        if filings is None:
+            return []
+
+        records: list[dict[str, Any]] = []
+        for filing in filings[:limit]:
+            try:
+                record = extract_proxy_statement_record(filing)
+                if record:
+                    records.append(record)
+            except Exception:
+                log.warning(
+                    "Could not parse DEF 14A for %s / %s",
+                    ticker,
+                    getattr(filing, "accession_no", None),
+                    exc_info=True,
+                )
+        return records
+    except Exception:
+        log.warning(
+            "Could not retrieve proxy statement data for %s",
+            ticker,
+            exc_info=True,
+        )
+        return []
+
+
+def summarize_proxy_statement(
+    ticker: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    limit: int = 5,
+    include_amendments: bool = False,
+) -> dict[str, Any]:
+    """Return a higher-level summary across one or more proxy filings."""
+    rows = get_proxy_statement_data(
+        ticker=ticker,
+        start_date=start_date,
+        end_date=end_date,
+        limit=limit,
+        include_amendments=include_amendments,
+    )
+    return summarize_proxy_statement_rows(rows)
+
+
+def _pick_thirteenf_filing(
+    filings: Any,
+    report_period: str | None = None,
+    scan_limit: int = 40,
+) -> Any | None:
+    """Pick the best-matching 13F filing from a filings collection."""
+    if filings is None:
+        return None
+    if report_period is None:
+        if hasattr(filings, "latest"):
+            try:
+                return filings.latest()
+            except Exception:
+                pass
+        try:
+            return filings[0]
+        except Exception:
+            return None
+
+    for filing in filings[:scan_limit]:
+        try:
+            thirteen_f = filing.obj()
+        except Exception:
+            continue
+        if thirteen_f is not None and str(getattr(thirteen_f, "report_period", "") or "") == report_period:
+            return filing
+    return None
+
+
+def get_institutional_holdings(
+    manager: str,
+    report_period: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    min_value: float = 0.0,
+    limit: int = 100,
+    include_amendments: bool = False,
+) -> list[dict[str, Any]]:
+    """Return structured holdings from a manager's latest or selected 13F filing."""
+    try:
+        from edgar import Company as EdgarCompany
+
+        entity = EdgarCompany(manager.strip())
+        filings = entity.get_filings(
+            form="13F-HR",
+            filing_date=_build_filing_date_filter(start_date, end_date),
+            amendments=include_amendments,
+        )
+        filing = _pick_thirteenf_filing(filings, report_period=report_period)
+        if filing is None:
+            return []
+        return extract_institutional_holdings(
+            filing,
+            min_value=min_value,
+            limit=limit,
+        )
+    except Exception:
+        log.warning(
+            "Could not retrieve institutional holdings for %s",
+            manager,
+            exc_info=True,
+        )
+        return []
+
+
+def summarize_institutional_holdings(
+    manager: str,
+    report_period: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    top_n: int = 10,
+    min_value: float = 0.0,
+    include_amendments: bool = False,
+) -> dict[str, Any]:
+    """Return a concentration-oriented summary of a manager's 13F holdings."""
+    rows = get_institutional_holdings(
+        manager=manager,
+        report_period=report_period,
+        start_date=start_date,
+        end_date=end_date,
+        min_value=min_value,
+        limit=None,
+        include_amendments=include_amendments,
+    )
+    return summarize_institutional_holdings_rows(rows, top_n=top_n)

@@ -21,6 +21,9 @@ from investment_researcher.analytics import (
     get_filings_list as _get_filings_list,
     get_filing_text as _get_filing_text,
     get_insider_trades as _get_insider_trades,
+    get_institutional_holdings as _get_institutional_holdings,
+    get_material_events as _get_material_events,
+    get_proxy_statement_data as _get_proxy_statement_data,
     get_ratios_by_category,
     get_ratios_latest as _get_ratios_latest,
     get_ratios_ttm as _get_ratios_ttm,
@@ -32,6 +35,10 @@ from investment_researcher.analytics import (
     quarterly_detail,
     ratio_timeseries,
     search_companies as _search_companies,
+    summarize_institutional_holdings as _summarize_institutional_holdings,
+    summarize_insider_sells as _summarize_insider_sells,
+    summarize_material_events as _summarize_material_events,
+    summarize_proxy_statement as _summarize_proxy_statement,
     ticker_summary,
     ttm_metrics,
 )
@@ -418,6 +425,243 @@ def get_insider_trades(
 
 
 @function_tool
+def summarize_insider_sells(
+    ticker: str,
+    start_date: str,
+    end_date: str,
+    transaction_codes: list[str] | None = None,
+    min_value: float = 0.0,
+    group_by: str = "insider_name",
+    limit: int = 25,
+    include_amendments: bool = False,
+) -> str:
+    """Return grouped Form 4 sell summaries for a date range.
+
+    This complements get_insider_trades by aggregating rows into grouped insider
+    sell summaries such as total proceeds per insider or per transaction code.
+
+    Args:
+        ticker: Stock ticker symbol.
+        start_date: Earliest filing date, inclusive (YYYY-MM-DD).
+        end_date: Latest filing date, inclusive (YYYY-MM-DD).
+        transaction_codes: Optional Form 4 transaction codes to include. Defaults to ["S", "F"].
+        min_value: Minimum absolute transaction value/proceeds in dollars.
+        group_by: One of "insider_name", "insider_name_and_code", or "transaction_code".
+        limit: Maximum number of grouped summary rows to return.
+        include_amendments: Whether to include amended forms like 4/A.
+    """
+    results = _summarize_insider_sells(
+        ticker=ticker,
+        start_date=start_date,
+        end_date=end_date,
+        transaction_codes=transaction_codes,
+        min_value=min_value,
+        group_by=group_by,
+        limit=limit,
+        include_amendments=include_amendments,
+    )
+    return json.dumps(results, default=str)
+
+
+@function_tool
+def get_material_events(
+    ticker: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    item_codes: list[str] | None = None,
+    limit: int = 50,
+    include_amendments: bool = False,
+    summary_chars: int = 400,
+) -> str:
+    """Return structured 8-K event rows for a company.
+
+    Use this instead of reading raw 8-K text when the user asks about specific
+    SEC item codes or recent material events.
+
+    Args:
+        ticker: Stock ticker symbol.
+        start_date: Optional earliest filing date (YYYY-MM-DD).
+        end_date: Optional latest filing date (YYYY-MM-DD).
+        item_codes: Optional list of item codes such as ["1.01", "2.02", "5.02"].
+        limit: Maximum number of event rows to return.
+        include_amendments: Whether to include amended forms like 8-K/A.
+        summary_chars: Maximum characters to include in the per-item text excerpt.
+    """
+    results = _get_material_events(
+        ticker=ticker,
+        start_date=start_date,
+        end_date=end_date,
+        item_codes=item_codes,
+        limit=limit,
+        include_amendments=include_amendments,
+        summary_chars=summary_chars,
+    )
+    return json.dumps(results, default=str)
+
+
+@function_tool
+def summarize_material_events(
+    ticker: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    item_codes: list[str] | None = None,
+    group_by: str = "item_code",
+    limit: int = 25,
+    include_amendments: bool = False,
+    summary_chars: int = 400,
+) -> str:
+    """Return grouped summaries of a company's 8-K filings.
+
+    Args:
+        ticker: Stock ticker symbol.
+        start_date: Optional earliest filing date (YYYY-MM-DD).
+        end_date: Optional latest filing date (YYYY-MM-DD).
+        item_codes: Optional list of item codes to include.
+        group_by: One of "item_code" or "content_type".
+        limit: Maximum number of grouped summaries to return.
+        include_amendments: Whether to include amended forms like 8-K/A.
+        summary_chars: Maximum characters to include in sampled event excerpts.
+    """
+    results = _summarize_material_events(
+        ticker=ticker,
+        start_date=start_date,
+        end_date=end_date,
+        item_codes=item_codes,
+        group_by=group_by,
+        limit=limit,
+        include_amendments=include_amendments,
+        summary_chars=summary_chars,
+    )
+    return json.dumps(results, default=str)
+
+
+@function_tool
+def get_proxy_statement_data(
+    ticker: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    limit: int = 5,
+    include_amendments: bool = False,
+) -> str:
+    """Return structured DEF 14A snapshots for one or more filings.
+
+    Includes CEO compensation, pay-vs-performance metrics, and a compact
+    executive-compensation history when XBRL data is available.
+
+    Args:
+        ticker: Stock ticker symbol.
+        start_date: Optional earliest filing date (YYYY-MM-DD).
+        end_date: Optional latest filing date (YYYY-MM-DD).
+        limit: Maximum number of proxy filings to return.
+        include_amendments: Whether to include amended proxy forms.
+    """
+    results = _get_proxy_statement_data(
+        ticker=ticker,
+        start_date=start_date,
+        end_date=end_date,
+        limit=limit,
+        include_amendments=include_amendments,
+    )
+    return json.dumps(results, default=str)
+
+
+@function_tool
+def summarize_proxy_statement(
+    ticker: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    limit: int = 5,
+    include_amendments: bool = False,
+) -> str:
+    """Return a higher-level summary of recent proxy statement filings.
+
+    Args:
+        ticker: Stock ticker symbol.
+        start_date: Optional earliest filing date (YYYY-MM-DD).
+        end_date: Optional latest filing date (YYYY-MM-DD).
+        limit: Maximum number of proxy filings to incorporate.
+        include_amendments: Whether to include amended proxy forms.
+    """
+    results = _summarize_proxy_statement(
+        ticker=ticker,
+        start_date=start_date,
+        end_date=end_date,
+        limit=limit,
+        include_amendments=include_amendments,
+    )
+    return json.dumps(results, default=str)
+
+
+@function_tool
+def get_institutional_holdings(
+    manager: str,
+    report_period: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    min_value: float = 0.0,
+    limit: int = 100,
+    include_amendments: bool = False,
+) -> str:
+    """Return structured holdings from a manager's latest or selected 13F filing.
+
+    The manager argument may be a filer ticker, company name, or manager name,
+    such as "BRK" or "Berkshire Hathaway".
+
+    Args:
+        manager: Institutional manager identifier or name.
+        report_period: Optional 13F report period to target (YYYY-MM-DD).
+        start_date: Optional earliest filing date (YYYY-MM-DD).
+        end_date: Optional latest filing date (YYYY-MM-DD).
+        min_value: Minimum holding value in dollars.
+        limit: Maximum number of holdings rows to return.
+        include_amendments: Whether to include amended 13F forms.
+    """
+    results = _get_institutional_holdings(
+        manager=manager,
+        report_period=report_period,
+        start_date=start_date,
+        end_date=end_date,
+        min_value=min_value,
+        limit=limit,
+        include_amendments=include_amendments,
+    )
+    return json.dumps(results, default=str)
+
+
+@function_tool
+def summarize_institutional_holdings(
+    manager: str,
+    report_period: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    top_n: int = 10,
+    min_value: float = 0.0,
+    include_amendments: bool = False,
+) -> str:
+    """Return a concentration-oriented 13F summary for an institutional manager.
+
+    Args:
+        manager: Institutional manager identifier or name.
+        report_period: Optional 13F report period to target (YYYY-MM-DD).
+        start_date: Optional earliest filing date (YYYY-MM-DD).
+        end_date: Optional latest filing date (YYYY-MM-DD).
+        top_n: Number of top holdings to include in the summary.
+        min_value: Minimum holding value in dollars for included positions.
+        include_amendments: Whether to include amended 13F forms.
+    """
+    results = _summarize_institutional_holdings(
+        manager=manager,
+        report_period=report_period,
+        start_date=start_date,
+        end_date=end_date,
+        top_n=top_n,
+        min_value=min_value,
+        include_amendments=include_amendments,
+    )
+    return json.dumps(results, default=str)
+
+
+@function_tool
 def list_available_tickers() -> str:
     """List all company tickers available in the financial database."""
     tickers = get_all_tickers()
@@ -454,4 +698,11 @@ ALL_TOOLS = [
     list_filings,
     read_filing,
     get_insider_trades,
+    summarize_insider_sells,
+    get_material_events,
+    summarize_material_events,
+    get_proxy_statement_data,
+    summarize_proxy_statement,
+    get_institutional_holdings,
+    summarize_institutional_holdings,
 ]
