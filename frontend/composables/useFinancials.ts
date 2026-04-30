@@ -15,6 +15,25 @@ import {
   type Filing,
 } from '~/lib/api'
 
+const financialTabs = [
+  'income',
+  'balance',
+  'cashflow',
+  'growth',
+  'kpi',
+  'ratios',
+  'health',
+  'quarterly',
+  'filings',
+] as const
+
+type StatementTab = 'income' | 'balance' | 'cashflow' | 'growth' | 'kpi'
+type FinancialTab = (typeof financialTabs)[number]
+
+function isFinancialTab(tab: string): tab is FinancialTab {
+  return financialTabs.includes(tab as FinancialTab)
+}
+
 export function useFinancials(ticker: Ref<string>, periodType: Ref<string>) {
   // Income
   const income = ref<FinancialsResponse | null>(null)
@@ -28,41 +47,41 @@ export function useFinancials(ticker: Ref<string>, periodType: Ref<string>) {
   const filings = ref<Filing[]>([])
   const loading = ref(false)
 
+  async function fetchStatement(
+    target: typeof income,
+    tab: StatementTab,
+  ) {
+    target.value = await getFinancials(ticker.value, tab, periodType.value)
+  }
+
+  const tabFetchers: Record<FinancialTab, () => Promise<void>> = {
+    income: () => fetchStatement(income, 'income'),
+    balance: () => fetchStatement(balance, 'balance'),
+    cashflow: () => fetchStatement(cashflow, 'cashflow'),
+    growth: () => fetchStatement(growth, 'growth'),
+    kpi: () => fetchStatement(kpi, 'kpi'),
+    ratios: async () => {
+      ratios.value = await getRatios(ticker.value, periodType.value)
+    },
+    health: async () => {
+      health.value = await getHealth(ticker.value, periodType.value)
+    },
+    quarterly: async () => {
+      quarterly.value = await getQuarterly(ticker.value)
+    },
+    filings: async () => {
+      filings.value = await getFilings(ticker.value)
+    },
+  }
+
   async function fetchTab(tab: string) {
-    if (!ticker.value) return
+    if (!ticker.value || !isFinancialTab(tab)) return
+
     loading.value = true
     try {
-      switch (tab) {
-        case 'income':
-          income.value = await getFinancials(ticker.value, 'income', periodType.value)
-          break
-        case 'balance':
-          balance.value = await getFinancials(ticker.value, 'balance', periodType.value)
-          break
-        case 'cashflow':
-          cashflow.value = await getFinancials(ticker.value, 'cashflow', periodType.value)
-          break
-        case 'growth':
-          growth.value = await getFinancials(ticker.value, 'growth', periodType.value)
-          break
-        case 'kpi':
-          kpi.value = await getFinancials(ticker.value, 'kpi', periodType.value)
-          break
-        case 'ratios':
-          ratios.value = await getRatios(ticker.value, periodType.value)
-          break
-        case 'health':
-          health.value = await getHealth(ticker.value, periodType.value)
-          break
-        case 'quarterly':
-          quarterly.value = await getQuarterly(ticker.value)
-          break
-        case 'filings':
-          filings.value = await getFilings(ticker.value)
-          break
-      }
-    } catch (e) {
-      console.error(`Failed to fetch ${tab}:`, e)
+      await tabFetchers[tab]()
+    } catch (error) {
+      console.error(`Failed to fetch ${tab}:`, error)
     } finally {
       loading.value = false
     }

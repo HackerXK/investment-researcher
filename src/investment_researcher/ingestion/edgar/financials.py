@@ -16,6 +16,7 @@ This enables TTM (Trailing Twelve Months) = sum of most recent 4 discrete quarte
 """
 
 import logging
+from collections.abc import Iterator
 from datetime import date
 from typing import NamedTuple
 
@@ -356,6 +357,17 @@ def _dedup_period_end(df: pd.DataFrame) -> pd.DataFrame:
     if "fiscal_year" in df.columns:
         agg_cols["fiscal_year"] = "first"
     return df.groupby("period_end", as_index=False).agg(agg_cols)
+
+
+def _iter_deduped_period_values(df_part: pd.DataFrame) -> Iterator[tuple[date, float]]:
+    """Yield validated period_end/value pairs from a deduplicated metric slice."""
+    deduped = _dedup_period_end(df_part)
+    for _, row in deduped.iterrows():
+        pe_date = _to_date(row["period_end"])
+        value = row["numeric_value"]
+        if pe_date is None or pd.isna(value):
+            continue
+        yield pe_date, float(value)
 
 
 def _select_annual_flow_rows(df: pd.DataFrame) -> pd.DataFrame:
@@ -732,16 +744,9 @@ def _extract_stock_s1(
         period_data = ts[ts["fiscal_period"] == fiscal_period].copy()
         if period_data.empty:
             continue
-        deduped = _dedup_period_end(period_data)
-        for _, row in deduped.iterrows():
-            pe = row["period_end"]
-            if pd.isna(pe) or pd.isna(row["numeric_value"]):
-                continue
-            pe_date = _to_date(pe)
-            if pe_date is None:
-                continue
+        for pe_date, value in _iter_deduped_period_values(period_data):
             rows.append(_make_row(
-                ticker, cik, metric_type, float(row["numeric_value"]), pe_date,
+                ticker, cik, metric_type, value, pe_date,
                 period_type, "10-K" if period_type == "annual" else "10-Q",
             ))
 
@@ -862,14 +867,9 @@ def _extract_canonical_long_term_debt_from_raw(
         subset = df_part[df_part["concept"].isin(concepts)]
         if subset.empty:
             return {}
-        deduped = _dedup_period_end(subset)
         result: dict[date, float] = {}
-        for _, row in deduped.iterrows():
-            pe_date = _to_date(row.get("period_end"))
-            val = row.get("numeric_value")
-            if pe_date is None or pd.isna(val):
-                continue
-            result[pe_date] = float(val)
+        for pe_date, value in _iter_deduped_period_values(subset):
+            result[pe_date] = value
         return result
 
     rows: list[dict] = []
@@ -961,15 +961,10 @@ def _extract_flow_from_raw(
         for fiscal_period in ("Q1", "Q2", "Q3", "Q4"):
             fp_df = q_df[q_df["fiscal_period"] == fiscal_period]
             if not fp_df.empty:
-                deduped = _dedup_period_end(fp_df)
-                for _, row in deduped.iterrows():
-                    pe_date = _to_date(row["period_end"])
-                    val = row["numeric_value"]
-                    if pe_date is None or pd.isna(val):
-                        continue
+                for pe_date, value in _iter_deduped_period_values(fp_df):
                     emitted_keys.add((fiscal_period, pe_date))
                     all_rows.append(_make_row(
-                        ticker, cik, metric_type, float(val), pe_date,
+                        ticker, cik, metric_type, value, pe_date,
                         "quarterly", "10-Q" if fiscal_period != "Q4" else "10-K",
                     ))
 
@@ -1067,14 +1062,9 @@ def _extract_by_fiscal_period(
         period_data = concept_df[concept_df["fiscal_period"] == fiscal_period]
         if period_data.empty:
             continue
-        deduped = _dedup_period_end(period_data)
-        for _, row in deduped.iterrows():
-            pe_date = _to_date(row["period_end"])
-            val = row["numeric_value"]
-            if pe_date is None or pd.isna(val):
-                continue
+        for pe_date, value in _iter_deduped_period_values(period_data):
             all_rows.append(_make_row(
-                ticker, cik, metric_type, float(val), pe_date,
+                ticker, cik, metric_type, value, pe_date,
                 period_type, "10-K" if period_type == "annual" else "10-Q",
             ))
 
@@ -1089,14 +1079,9 @@ def _emit_rows(
     all_rows: list[dict],
 ) -> None:
     """Emit deduplicated rows for a single fiscal_period slice."""
-    deduped = _dedup_period_end(df_part)
-    for _, row in deduped.iterrows():
-        pe_date = _to_date(row["period_end"])
-        val = row["numeric_value"]
-        if pe_date is None or pd.isna(val):
-            continue
+    for pe_date, value in _iter_deduped_period_values(df_part):
         all_rows.append(_make_row(
-            ticker, cik, metric_type, float(val), pe_date,
+            ticker, cik, metric_type, value, pe_date,
             period_type, "10-K" if period_type == "annual" else "10-Q",
         ))
 
