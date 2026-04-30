@@ -38,6 +38,7 @@ from investment_researcher.analytics import (
 )
 from investment_researcher.config import LLM_API_BASE, LLM_API_KEY, LLM_MODEL
 from investment_researcher.analytics.sec_filings import (
+    dataframe_records as sec_dataframe_records,
     summarize_institutional_holdings_rows,
 )
 from investment_researcher.web.agent_tools import ALL_TOOLS
@@ -560,18 +561,6 @@ def _format_period_label(period_end: str) -> str:
         return period_end
 
 
-def _dataframe_records(df: Any) -> list[dict[str, Any]]:
-    """Convert a dataframe-like object into JSON-safe records."""
-    if df is None or getattr(df, "empty", True):
-        return []
-
-    converted = df
-    columns = {str(column) for column in getattr(df, "columns", [])}
-    if "period_end" not in columns:
-        converted = df.reset_index()
-    return converted.to_dict(orient="records")
-
-
 def _latest_metric_row(
     rows: list[dict[str, Any]],
     metric_type: str,
@@ -992,7 +981,7 @@ async def _try_direct_answer(request: ChatRequest) -> tuple[list[str], str] | No
         cashflow_df = await asyncio.to_thread(analytics_cashflow_timeseries, ticker, "annual")
         answer = _render_annual_cashflow_summary_answer(
             request,
-            _dataframe_records(cashflow_df),
+            sec_dataframe_records(cashflow_df),
         )
         if answer:
             return (["retrieving cash flow data"], answer)
@@ -1053,7 +1042,7 @@ async def _try_direct_answer(request: ChatRequest) -> tuple[list[str], str] | No
         answer = _render_events_and_cashflow_answer_direct(
             request,
             events,
-            _dataframe_records(cashflow_df),
+            sec_dataframe_records(cashflow_df),
         )
         if answer:
             return (["analyzing 8-K events", "retrieving cash flow data"], answer)
@@ -1065,7 +1054,7 @@ async def _try_direct_answer(request: ChatRequest) -> tuple[list[str], str] | No
         )
         answer = _render_quarterly_trend_and_ttm_answer(
             request,
-            _dataframe_records(quarterly_df),
+            sec_dataframe_records(quarterly_df),
             ttm_payload,
         )
         if answer:
@@ -1097,7 +1086,7 @@ async def _try_direct_answer(request: ChatRequest) -> tuple[list[str], str] | No
             answer = _render_cross_company_fcf_ranking(
                 ranking_tickers,
                 {
-                    symbol: _dataframe_records(df)
+                    symbol: sec_dataframe_records(df)
                     for symbol, df in zip(ranking_tickers, cashflow_dfs, strict=True)
                 },
             )

@@ -39,12 +39,10 @@ from investment_researcher.ratios import (
 )
 from investment_researcher.analytics.sec_filings import (
     build_filing_date_filter as _build_filing_date_filter_impl,
-    classify_trade_significance as _classify_trade_significance_impl,
     extract_form4_trades,
     extract_institutional_holdings,
     extract_material_events,
     extract_proxy_statement_record,
-    normalize_number as _normalize_number_impl,
     summarize_insider_sales_rows,
     summarize_institutional_holdings_rows,
     summarize_material_event_rows,
@@ -236,16 +234,6 @@ def _build_filing_date_filter(
 ) -> str | None:
     """Build an edgartools-compatible filing date filter."""
     return _build_filing_date_filter_impl(start_date, end_date)
-
-
-def _normalize_number(value: Any) -> int | float | None:
-    """Convert pandas / Python numeric-like values to JSON-safe numbers."""
-    return _normalize_number_impl(value)
-
-
-def _classify_trade_significance(value: Any) -> str:
-    """Bucket a trade's value for quick screening."""
-    return _classify_trade_significance_impl(value)
 
 
 def get_filing_text(ticker: str, accession_number: str) -> str:

@@ -8,6 +8,62 @@ export interface ChatMessage {
   content: string
 }
 
+type ChatSSEEvent =
+  | { type: 'done' }
+  | { type: 'error'; error: string }
+  | { type: 'progress'; progress: string }
+  | { type: 'token'; token: string }
+
+
+function parseChatSSEEvent(data: string): ChatSSEEvent | null {
+  if (data === '[DONE]') {
+    return { type: 'done' }
+  }
+
+  let parsed: any
+  try {
+    parsed = JSON.parse(data)
+  } catch {
+    return null
+  }
+
+  if (typeof parsed.error === 'string' && parsed.error) {
+    return { type: 'error', error: parsed.error }
+  }
+
+  if (typeof parsed.progress === 'string' && parsed.progress) {
+    return { type: 'progress', progress: parsed.progress }
+  }
+
+  const token =
+    typeof parsed.token === 'string'
+      ? parsed.token
+      : parsed.choices?.[0]?.delta?.content
+
+  if (typeof token === 'string' && token) {
+    return { type: 'token', token }
+  }
+
+  return null
+}
+
+
+function appendAssistantToken(messages: ChatMessage[], token: string) {
+  const idx = messages.length - 1
+  messages[idx] = {
+    ...messages[idx],
+    content: messages[idx].content + token,
+  }
+}
+
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message
+  }
+  return String(error)
+}
+
 function createChatSessionId() {
   const uuid = globalThis.crypto?.randomUUID?.()
   if (uuid) {
@@ -67,42 +123,33 @@ export function useChat(ticker: Ref<string>) {
         for (const line of lines) {
           if (line.startsWith('data: ')) {
             const data = line.slice(6)
-            if (data === '[DONE]') continue
-
-            let parsed: any
-            try {
-              parsed = JSON.parse(data)
-            } catch {
-              // non-JSON SSE line, skip
+            const event = parseChatSSEEvent(data)
+            if (!event || event.type === 'done') {
               continue
             }
 
-            if (parsed.error) throw new Error(parsed.error)
+            if (event.type === 'error') {
+              throw new Error(event.error)
+            }
 
-            if (parsed.progress) {
-              progress.value = parsed.progress
+            if (event.type === 'progress') {
+              progress.value = event.progress
               continue
             }
 
-            const delta = parsed.token ?? parsed.choices?.[0]?.delta?.content
-            if (delta) {
+            if (event.type === 'token') {
               progress.value = ''
-              // Update the last assistant message reactively
-              const idx = messages.value.length - 1
-              messages.value[idx] = {
-                ...messages.value[idx],
-                content: messages.value[idx].content + delta,
-              }
+              appendAssistantToken(messages.value, event.token)
             }
           }
         }
       }
-    } catch (e: any) {
+    } catch (e: unknown) {
       progress.value = ''
       const idx = messages.value.length - 1
       messages.value[idx] = {
         ...messages.value[idx],
-        content: messages.value[idx].content || `Error: ${e.message}`,
+        content: messages.value[idx].content || `Error: ${getErrorMessage(e)}`,
       }
     } finally {
       progress.value = ''

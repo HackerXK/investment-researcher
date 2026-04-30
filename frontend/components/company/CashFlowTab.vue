@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '~/components/ui/card'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '~/components/ui/table'
 import type { FinancialsResponse } from '~/lib/api'
 import { barChart, lineChart } from '~/lib/charts'
-import { buildStatementTableView } from '~/lib/financialTables'
+import { buildStatementTableView, extractMetricColumn } from '~/lib/financialTables'
 import { fmtMillions, deltaColor } from '~/lib/formatters'
 
 const props = defineProps<{ data: FinancialsResponse; ticker: string }>()
@@ -14,21 +14,13 @@ const periods = computed(() => pivot.value?.index.map(p => p.slice(0, 10)) || []
 const metrics = computed(() => pivot.value?.columns || [])
 const table = computed(() => buildStatementTableView(pivot.value, props.data.ttm))
 
-function colData(metric: string): (number | null)[] {
-  const p = pivot.value
-  if (!p) return []
-  const ci = p.columns.indexOf(metric)
-  if (ci < 0) return []
-  return p.data.map(row => row[ci])
-}
-
 const cfChart = computed(() => {
   const p = pivot.value
   if (!p) return null
   const series = []
-  if (metrics.value.includes('operating_cash_flow')) series.push({ name: 'Operating', data: colData('operating_cash_flow') })
-  if (metrics.value.includes('investing_cash_flow')) series.push({ name: 'Investing', data: colData('investing_cash_flow') })
-  if (metrics.value.includes('financing_cash_flow')) series.push({ name: 'Financing', data: colData('financing_cash_flow') })
+  if (metrics.value.includes('operating_cash_flow')) series.push({ name: 'Operating', data: extractMetricColumn(p, 'operating_cash_flow') })
+  if (metrics.value.includes('investing_cash_flow')) series.push({ name: 'Investing', data: extractMetricColumn(p, 'investing_cash_flow') })
+  if (metrics.value.includes('financing_cash_flow')) series.push({ name: 'Financing', data: extractMetricColumn(p, 'financing_cash_flow') })
   if (!series.length) return null
   return barChart(periods.value, series, { yPrefix: '$' })
 })
@@ -36,11 +28,11 @@ const cfChart = computed(() => {
 const fcfChart = computed(() => {
   const p = pivot.value
   if (!p) return null
-  const op = colData('operating_cash_flow')
+  const op = extractMetricColumn(p, 'operating_cash_flow')
   if (!op.length) return null
 
-  const backendFcf = colData('free_cash_flow')
-  const cap = colData('capex')
+  const backendFcf = extractMetricColumn(p, 'free_cash_flow')
+  const cap = extractMetricColumn(p, 'capex')
   const fcf = backendFcf.length
     ? backendFcf
     : op.map((v, i) => {

@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '~/components/ui/card'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '~/components/ui/table'
 import type { FinancialsResponse } from '~/lib/api'
 import { barChart, lineChart } from '~/lib/charts'
-import { buildStatementTableView } from '~/lib/financialTables'
+import { buildStatementTableView, extractMetricColumn } from '~/lib/financialTables'
 import { deltaColor, fmtMetricValue } from '~/lib/formatters'
 
 const props = defineProps<{ data: FinancialsResponse; ticker: string }>()
@@ -16,14 +16,6 @@ const periods = computed(() => pivot.value?.index.map(p => p.slice(0, 10)) || []
 const metrics = computed(() => pivot.value?.columns || [])
 const table = computed(() => buildStatementTableView(pivot.value, props.data.ttm))
 
-function colData(metric: string): (number | null)[] {
-  const p = pivot.value
-  if (!p) return []
-  const ci = p.columns.indexOf(metric)
-  if (ci < 0) return []
-  return p.data.map(row => row[ci])
-}
-
 function fmtTableValue(metric: string, val: number | null) {
   return fmtMetricValue(val, metricDisplayFormats.value[metric] || 'millions')
 }
@@ -31,10 +23,10 @@ function fmtTableValue(metric: string, val: number | null) {
 const revenueChart = computed(() => {
   const p = pivot.value
   if (!p) return null
-  const rev = colData('revenue')
+  const rev = extractMetricColumn(p, 'revenue')
   if (!rev.length) return null
   const series = [{ name: 'Revenue', data: rev }]
-  const ni = colData('net_income')
+  const ni = extractMetricColumn(p, 'net_income')
   if (ni.length) series.push({ name: 'Net Income', data: ni })
   return barChart(periods.value, series, { yPrefix: '$' })
 })
@@ -42,11 +34,11 @@ const revenueChart = computed(() => {
 const marginChart = computed(() => {
   const p = pivot.value
   if (!p) return null
-  const rev = colData('revenue')
+  const rev = extractMetricColumn(p, 'revenue')
   if (!rev.length) return null
 
   function marginSeries(name: string, metric: string) {
-    const d = colData(metric)
+    const d = extractMetricColumn(p, metric)
     return {
       name,
       data: d.map((v, i) => {
@@ -68,7 +60,7 @@ const marginChart = computed(() => {
 const marginEmptyMessage = computed(() => {
   if (!pivot.value || marginChart.value) return null
 
-  const rev = colData('revenue')
+  const rev = extractMetricColumn(pivot.value, 'revenue')
   if (!rev.length) {
     return 'Revenue is unavailable for the selected period.'
   }

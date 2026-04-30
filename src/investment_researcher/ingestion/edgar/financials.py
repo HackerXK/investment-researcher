@@ -17,6 +17,7 @@ This enables TTM (Trailing Twelve Months) = sum of most recent 4 discrete quarte
 
 import logging
 from datetime import date
+from typing import NamedTuple
 
 import pandas as pd
 
@@ -62,10 +63,17 @@ STOCK_METRICS: set[str] = {
 }
 
 # Duration buckets (days) — matches edgartools TTMCalculator
-DURATION_QUARTER = (70, 120)    # ~3 months (discrete Q1, or discrete Q2/Q3)
-DURATION_YTD_6M = (140, 229)    # ~6 months (Q1+Q2 cumulative)
-DURATION_YTD_9M = (230, 329)    # ~9 months (Q1+Q2+Q3 cumulative)
-DURATION_ANNUAL = (330, 420)    # ~12 months (full fiscal year)
+
+
+class DurationRange(NamedTuple):
+    min_days: int
+    max_days: int
+
+
+DURATION_QUARTER = DurationRange(70, 120)    # ~3 months (discrete Q1, or discrete Q2/Q3)
+DURATION_YTD_6M = DurationRange(140, 229)    # ~6 months (Q1+Q2 cumulative)
+DURATION_YTD_9M = DurationRange(230, 329)    # ~9 months (Q1+Q2+Q3 cumulative)
+DURATION_ANNUAL = DurationRange(330, 420)    # ~12 months (full fiscal year)
 
 # Map edgartools supported concept names to our metric_type names.
 # These use the high-level concept names from facts.time_series().
@@ -389,13 +397,13 @@ def _duration_bucket(period_start, period_end) -> str | None:
         return None
     days = (pe - ps).days
 
-    if DURATION_QUARTER[0] <= days <= DURATION_QUARTER[1]:
+    if DURATION_QUARTER.min_days <= days <= DURATION_QUARTER.max_days:
         return "quarter"
-    if DURATION_YTD_6M[0] <= days <= DURATION_YTD_6M[1]:
+    if DURATION_YTD_6M.min_days <= days <= DURATION_YTD_6M.max_days:
         return "ytd_6m"
-    if DURATION_YTD_9M[0] <= days <= DURATION_YTD_9M[1]:
+    if DURATION_YTD_9M.min_days <= days <= DURATION_YTD_9M.max_days:
         return "ytd_9m"
-    if DURATION_ANNUAL[0] <= days <= DURATION_ANNUAL[1]:
+    if DURATION_ANNUAL.min_days <= days <= DURATION_ANNUAL.max_days:
         return "annual"
     return None
 
@@ -413,10 +421,10 @@ def _vectorized_duration_bucket(
     days = (pe - ps).dt.days
 
     result = pd.Series(None, index=period_start.index, dtype=object)
-    result[(days >= DURATION_QUARTER[0]) & (days <= DURATION_QUARTER[1])] = "quarter"
-    result[(days >= DURATION_YTD_6M[0]) & (days <= DURATION_YTD_6M[1])] = "ytd_6m"
-    result[(days >= DURATION_YTD_9M[0]) & (days <= DURATION_YTD_9M[1])] = "ytd_9m"
-    result[(days >= DURATION_ANNUAL[0]) & (days <= DURATION_ANNUAL[1])] = "annual"
+    result[(days >= DURATION_QUARTER.min_days) & (days <= DURATION_QUARTER.max_days)] = "quarter"
+    result[(days >= DURATION_YTD_6M.min_days) & (days <= DURATION_YTD_6M.max_days)] = "ytd_6m"
+    result[(days >= DURATION_YTD_9M.min_days) & (days <= DURATION_YTD_9M.max_days)] = "ytd_9m"
+    result[(days >= DURATION_ANNUAL.min_days) & (days <= DURATION_ANNUAL.max_days)] = "annual"
     return result
 
 

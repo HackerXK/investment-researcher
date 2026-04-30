@@ -34,6 +34,23 @@ function normalizePeriod(period: string) {
   return period === 'TTM' ? period : period.slice(0, 10)
 }
 
+
+export function extractMetricColumn(
+  pivot: WideData | null | undefined,
+  metric: string,
+): (number | null)[] {
+  if (!pivot) {
+    return []
+  }
+
+  const columnIndex = pivot.columns.indexOf(metric)
+  if (columnIndex < 0) {
+    return []
+  }
+
+  return pivot.data.map(row => row[columnIndex] ?? null)
+}
+
 export function buildStatementTableView(
   pivot?: WideData | null,
   ttm?: Record<string, number | null>,

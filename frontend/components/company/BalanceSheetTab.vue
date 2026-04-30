@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '~/components/ui/card'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '~/components/ui/table'
 import type { FinancialsResponse } from '~/lib/api'
 import { barChart } from '~/lib/charts'
-import { buildStatementTableView } from '~/lib/financialTables'
+import { buildStatementTableView, extractMetricColumn } from '~/lib/financialTables'
 import { fmtMillions } from '~/lib/formatters'
 
 const props = defineProps<{ data: FinancialsResponse; ticker: string }>()
@@ -14,21 +14,13 @@ const periods = computed(() => pivot.value?.index.map(p => p.slice(0, 10)) || []
 const metrics = computed(() => pivot.value?.columns || [])
 const table = computed(() => buildStatementTableView(pivot.value, props.data.ttm))
 
-function colData(metric: string): (number | null)[] {
-  const p = pivot.value
-  if (!p) return []
-  const ci = p.columns.indexOf(metric)
-  if (ci < 0) return []
-  return p.data.map(row => row[ci])
-}
-
 const assetsLiabChart = computed(() => {
   const p = pivot.value
   if (!p) return null
   const series = []
-  if (metrics.value.includes('total_assets')) series.push({ name: 'Total Assets', data: colData('total_assets') })
-  if (metrics.value.includes('total_liabilities')) series.push({ name: 'Total Liabilities', data: colData('total_liabilities') })
-  if (metrics.value.includes('stockholders_equity')) series.push({ name: 'Equity', data: colData('stockholders_equity') })
+  if (metrics.value.includes('total_assets')) series.push({ name: 'Total Assets', data: extractMetricColumn(p, 'total_assets') })
+  if (metrics.value.includes('total_liabilities')) series.push({ name: 'Total Liabilities', data: extractMetricColumn(p, 'total_liabilities') })
+  if (metrics.value.includes('stockholders_equity')) series.push({ name: 'Equity', data: extractMetricColumn(p, 'stockholders_equity') })
   if (!series.length) return null
   return barChart(periods.value, series, { yPrefix: '$' })
 })
@@ -37,9 +29,9 @@ const debtChart = computed(() => {
   const p = pivot.value
   if (!p) return null
   const series = []
-  if (metrics.value.includes('short_term_debt')) series.push({ name: 'Short-term Debt', data: colData('short_term_debt') })
-  if (metrics.value.includes('long_term_debt')) series.push({ name: 'Long-term Debt', data: colData('long_term_debt') })
-  if (metrics.value.includes('cash')) series.push({ name: 'Cash', data: colData('cash') })
+  if (metrics.value.includes('short_term_debt')) series.push({ name: 'Short-term Debt', data: extractMetricColumn(p, 'short_term_debt') })
+  if (metrics.value.includes('long_term_debt')) series.push({ name: 'Long-term Debt', data: extractMetricColumn(p, 'long_term_debt') })
+  if (metrics.value.includes('cash')) series.push({ name: 'Cash', data: extractMetricColumn(p, 'cash') })
   if (!series.length) return null
   return barChart(periods.value, series, { yPrefix: '$' })
 })
