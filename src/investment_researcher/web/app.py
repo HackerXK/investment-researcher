@@ -5,6 +5,7 @@ Endpoints mirror the contract in ``05-tech-stack.md § API Contract``.
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 import math
 from typing import Any
 
@@ -39,16 +40,26 @@ from investment_researcher.ingestion.edgar.financials import rerun_slow_path_for
 from investment_researcher.ingestion.state import initialize_state_db
 from investment_researcher.ingestion.timeseries import initialize_db
 from investment_researcher.web.chat import ChatRequest, handle_chat
+from investment_researcher.web.tracing import shutdown_langfuse
 
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
+
+
+@asynccontextmanager
+async def _lifespan(_: FastAPI):
+    try:
+        yield
+    finally:
+        shutdown_langfuse()
 
 app = FastAPI(
     title="Investment Researcher API",
     version="0.1.0",
     docs_url="/api/docs",
     openapi_url="/api/openapi.json",
+    lifespan=_lifespan,
 )
 
 app.add_middleware(

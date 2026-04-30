@@ -336,6 +336,21 @@ LLM_API_KEY=EMPTY                        # API key (EMPTY for local vLLM)
 
 The agent uses `OpenAIChatCompletionsModel` (not the Responses API), so it works with any OpenAI-compatible endpoint including vLLM, Ollama, and llama.cpp.
 
+## Live Chat Evaluation
+
+The repository includes a live chat evaluation harness that runs the real chat stack
+against the configured OpenAI-compatible endpoint and grades answers against compact
+SEC-derived evidence.
+
+Run the smoke subset first:
+
+```bash
+python scripts/run_live_chat_eval.py --smoke
+```
+
+For the reusable question corpus, smoke-subset contents, and eval-specific notes, see
+[`docs/chat-eval-questions.md`](docs/chat-eval-questions.md).
+
 ## Financial Ratios & TTM Metrics
 
 Ratios and TTM metrics are computed on-the-fly from DuckDB — they are never persisted separately.

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 import pandas as pd
@@ -49,22 +50,104 @@ log = logging.getLogger(__name__)
 # Helpers
 # ---------------------------------------------------------------------------
 
-_MAX_FILING_CHARS = 50_000  # cap filing text so it doesn't flood context
+_MAX_FILING_CHARS = 200_000
+_FILING_HEAD_CHARS = 80_000
+_FILING_TRUNCATION_NOTICE = "\n\n[... filing text truncated ...]"
 
 
 def _df_to_json(df: pd.DataFrame) -> str:
     """Serialise a DataFrame to a compact JSON string (records orientation)."""
     if df.empty:
         return "[]"
+    converted = (
+        df.reset_index()
+        if df.index.name is not None or not isinstance(df.index, pd.RangeIndex)
+        else df.copy()
+    )
+    if "period_end" in converted.columns:
+        converted = converted.sort_values("period_end", ascending=False)
     # Convert timestamps / dates to strings for JSON serialisability
-    for col in df.columns:
-        if pd.api.types.is_datetime64_any_dtype(df[col]):
-            df[col] = df[col].astype(str)
-    return json.dumps(df.to_dict(orient="records"), default=str)
+    for col in converted.columns:
+        if pd.api.types.is_datetime64_any_dtype(converted[col]):
+            converted[col] = converted[col].astype(str)
+    return json.dumps(converted.to_dict(orient="records"), default=str)
 
 
 def _dict_to_json(d: dict[str, Any]) -> str:
     return json.dumps(d, default=str)
+
+
+def _normalize_optional_str_list(value: list[str] | str | None) -> list[str] | None:
+    """Accept sloppy LLM list arguments like "" or "None" and normalize them."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped or stripped.lower() == "none":
+            return None
+        return [stripped]
+
+    normalized = [str(item).strip() for item in value if str(item).strip()]
+    return normalized or None
+
+
+def _extract_filing_section(text: str, heading_patterns: list[str]) -> str | None:
+    """Extract a filing section starting at a matched heading through the next item."""
+    for pattern in heading_patterns:
+        match = re.search(pattern, text)
+        if not match:
+            continue
+        start = match.start()
+        end = len(text)
+        search_start = match.end()
+        next_match = re.search(
+            r"(?im)^#+\s*item\s+\d+[a-z]?\.?\b|^item\s+\d+[a-z]?\.?\b",
+            text[search_start:],
+        )
+        if next_match:
+            end = search_start + next_match.start()
+        return text[start:end].strip()
+    return None
+
+
+def _truncate_text_with_notice(text: str, max_chars: int) -> str:
+    """Truncate text to a hard character limit with a consistent notice."""
+    if len(text) <= max_chars:
+        return text
+
+    clip_at = max(max_chars - len(_FILING_TRUNCATION_NOTICE), 1)
+    return text[:clip_at].rstrip() + _FILING_TRUNCATION_NOTICE
+
+
+def _truncate_filing_text(text: str, max_chars: int = _MAX_FILING_CHARS) -> str:
+    """Preserve the filing front matter plus a later risk-factors section when truncating."""
+    if max_chars <= 0 or len(text) <= max_chars:
+        return text
+
+    if max_chars <= len(_FILING_TRUNCATION_NOTICE) + 256:
+        return _truncate_text_with_notice(text, max_chars)
+
+    head_chars = min(_FILING_HEAD_CHARS, max_chars)
+    head = text[:head_chars].rstrip()
+    parts = [head]
+    remaining = max_chars - len(head) - len(_FILING_TRUNCATION_NOTICE)
+    if remaining <= 256:
+        return _truncate_text_with_notice(text, max_chars)
+
+    risk_section = _extract_filing_section(
+        text,
+        [
+            r"(?im)^#+\s*item\s+1a\.?\s+risk factors\b",
+            r"(?im)^item\s+1a\.?\s+risk factors\b",
+        ],
+    )
+    if risk_section and risk_section not in head and remaining > 256:
+        marker = "\n\n[... skipped to Item 1A. Risk Factors ...]\n"
+        excerpt_budget = max(0, remaining - len(marker))
+        if excerpt_budget:
+            parts.append(marker + risk_section[:excerpt_budget].rstrip())
+
+    return "".join(parts).rstrip() + _FILING_TRUNCATION_NOTICE
 
 
 # ---------------------------------------------------------------------------
@@ -157,7 +240,9 @@ def get_growth_rates(
     ticker: str, metrics: list[str], period_type: str = "annual"
 ) -> str:
     """Get year-over-year growth rates for specific metrics.
-    Returns metric_type, period_end, value, and growth_pct.
+
+    Returns one row per period_end. Each requested metric appears as its own
+    column containing the YoY growth percentage for that period.
 
     Args:
         ticker: Stock ticker symbol.
@@ -170,9 +255,11 @@ def get_growth_rates(
 
 @function_tool
 def get_cashflow_pivot(ticker: str, period_type: str = "annual") -> str:
-    """Get cash flow statement in pivot format — one column per period.
-    Includes operating_cash_flow, investing_cash_flow, financing_cash_flow,
-    capex, dividends_paid, free_cash_flow.
+    """Get cash flow statement in pivot format.
+
+    Returns one row per period with a period_end field plus statement metrics
+    such as operating_cash_flow, capex, dividends_paid, and free_cash_flow.
+    Rows are serialized most recent period first.
 
     Args:
         ticker: Stock ticker symbol.
@@ -204,8 +291,11 @@ def get_ttm_metrics(ticker: str, metrics: list[str]) -> str:
 def get_quarterly_detail(
     ticker: str, metrics: list[str], n_quarters: int = 8
 ) -> str:
-    """Get quarterly financial data for specified metrics.
-    Returns up to n_quarters of quarterly data with metric_type, period, period_end, value.
+    """Get quarterly financial data for specified metrics in wide format.
+
+    Returns one row per requested metric_type. Each row includes a TTM field
+    plus columns like "Quarter Ended 12/31/2025" for the most recent quarters.
+    It does not invent or derive other metrics you did not request.
 
     Args:
         ticker: Stock ticker symbol.
@@ -361,22 +451,30 @@ def list_filings(
 
 
 @function_tool
-def read_filing(ticker: str, accession_number: str) -> str:
+def read_filing(
+    ticker: str,
+    accession_number: str,
+    truncate: bool = True,
+    max_chars: int = _MAX_FILING_CHARS,
+) -> str:
     """Read the full text of an SEC filing as markdown.
     Use list_filings first to find the accession_number.
 
-    The filing text may be truncated to fit within context limits.
+    Extremely long filings may still be truncated to stay within practical
+    context limits. Set truncate=false to return the full filing text.
 
     Args:
         ticker: Stock ticker symbol.
         accession_number: SEC accession number from list_filings (e.g. "0000320193-24-000123").
+        truncate: Whether to keep the practical truncation guard.
+        max_chars: Maximum number of characters to return when truncate=true.
     """
     text = _get_filing_text(ticker, accession_number)
     if not text:
         return "Filing not found or could not be retrieved."
-    if len(text) > _MAX_FILING_CHARS:
-        text = text[:_MAX_FILING_CHARS] + "\n\n[... filing text truncated ...]"
-    return text
+    if not truncate:
+        return text
+    return _truncate_filing_text(text, max_chars=max_chars)
 
 
 @function_tool
@@ -468,10 +566,10 @@ def get_material_events(
     ticker: str,
     start_date: str | None = None,
     end_date: str | None = None,
-    item_codes: list[str] | None = None,
+    item_codes: list[str] | str | None = None,
     limit: int = 50,
     include_amendments: bool = False,
-    summary_chars: int = 400,
+    summary_chars: int = 2_000,
 ) -> str:
     """Return structured 8-K event rows for a company.
 
@@ -491,7 +589,7 @@ def get_material_events(
         ticker=ticker,
         start_date=start_date,
         end_date=end_date,
-        item_codes=item_codes,
+        item_codes=_normalize_optional_str_list(item_codes),
         limit=limit,
         include_amendments=include_amendments,
         summary_chars=summary_chars,
@@ -504,11 +602,11 @@ def summarize_material_events(
     ticker: str,
     start_date: str | None = None,
     end_date: str | None = None,
-    item_codes: list[str] | None = None,
+    item_codes: list[str] | str | None = None,
     group_by: str = "item_code",
     limit: int = 25,
     include_amendments: bool = False,
-    summary_chars: int = 400,
+    summary_chars: int = 2_000,
 ) -> str:
     """Return grouped summaries of a company's 8-K filings.
 
@@ -526,7 +624,7 @@ def summarize_material_events(
         ticker=ticker,
         start_date=start_date,
         end_date=end_date,
-        item_codes=item_codes,
+        item_codes=_normalize_optional_str_list(item_codes),
         group_by=group_by,
         limit=limit,
         include_amendments=include_amendments,

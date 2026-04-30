@@ -31,7 +31,7 @@ _FORM4_CODE_DESCRIPTIONS = {
 
 _NOTABLE_TRADE_VALUE = 100_000.0
 _VERY_NOTABLE_TRADE_VALUE = 1_000_000.0
-_DEFAULT_EVENT_SUMMARY_CHARS = 400
+_DEFAULT_EVENT_SUMMARY_CHARS = 2_000
 
 
 def build_filing_date_filter(
@@ -39,6 +39,8 @@ def build_filing_date_filter(
     end_date: str | None,
 ) -> str | None:
     """Build an edgartools-compatible filing date filter."""
+    start_date = _normalize_optional_date_input(start_date)
+    end_date = _normalize_optional_date_input(end_date)
     if start_date and end_date:
         return f"{start_date}:{end_date}"
     if start_date:
@@ -46,6 +48,16 @@ def build_filing_date_filter(
     if end_date:
         return f":{end_date}"
     return None
+
+
+def _normalize_optional_date_input(value: Any) -> str | None:
+    """Treat empty sentinels from tool calls as missing dates."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text.lower() in {"none", "null"}:
+        return None
+    return text
 
 
 def normalize_number(value: Any) -> int | float | None:

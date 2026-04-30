@@ -8,10 +8,19 @@ export interface ChatMessage {
   content: string
 }
 
+function createChatSessionId() {
+  const uuid = globalThis.crypto?.randomUUID?.()
+  if (uuid) {
+    return `web-chat-${uuid}`
+  }
+  return `web-chat-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
 export function useChat(ticker: Ref<string>) {
   const messages = ref<ChatMessage[]>([])
   const streaming = ref(false)
   const progress = ref('')
+  const sessionId = ref(createChatSessionId())
 
   async function send(text: string) {
     if (!text.trim() || streaming.value) return
@@ -26,6 +35,8 @@ export function useChat(ticker: Ref<string>) {
       const body = JSON.stringify({
         message: text,
         ticker: ticker.value || undefined,
+        session_id: sessionId.value,
+        source: 'web-ui',
         history: messages.value.slice(0, -2).map(m => ({
           role: m.role,
           content: m.content,
@@ -102,6 +113,7 @@ export function useChat(ticker: Ref<string>) {
   function clear() {
     messages.value = []
     progress.value = ''
+    sessionId.value = createChatSessionId()
   }
 
   return { messages, streaming, progress, send, clear }

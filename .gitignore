@@ -38,3 +38,6 @@ frontend/.output/
 frontend/.cache/
 frontend/dist/
 
+# Exclude chat-eval
+artifacts/chat-eval/
+

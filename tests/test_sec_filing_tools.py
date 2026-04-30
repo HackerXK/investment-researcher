@@ -287,6 +287,60 @@ def test_get_proxy_statement_data_returns_structured_rows(monkeypatch):
     ]
 
 
+def test_get_proxy_statement_data_prefers_most_recent_filing(monkeypatch):
+    def fake_proxy(total_comp: int, filing_year: str):
+        return SimpleNamespace(
+            company_name="Apple Inc.",
+            cik="0000320193",
+            fiscal_year_end=filing_year,
+            peo_name="Timothy D. Cook",
+            peo_total_comp=total_comp,
+            peo_actually_paid_comp=total_comp,
+            neo_avg_total_comp=5_000_000,
+            neo_avg_actually_paid_comp=4_500_000,
+            total_shareholder_return=30.0,
+            peer_group_tsr=28.0,
+            net_income=90_000_000_000,
+            company_selected_measure="Operating income",
+            company_selected_measure_value=120_000_000_000,
+            performance_measures=["Operating income"],
+            insider_trading_policy_adopted=True,
+            has_xbrl=True,
+            executive_compensation=pd.DataFrame(),
+            pay_vs_performance=pd.DataFrame(),
+        )
+
+    filings = [
+        SimpleNamespace(
+            accession_no="proxy-2025",
+            form="DEF 14A",
+            filing_date="2025-01-10",
+            obj=lambda: fake_proxy(74_609_802, "2024-09-28"),
+        ),
+        SimpleNamespace(
+            accession_no="proxy-2026",
+            form="DEF 14A",
+            filing_date="2026-01-08",
+            obj=lambda: fake_proxy(74_294_811, "2025-09-27"),
+        ),
+    ]
+
+    class FakeCompany:
+        def __init__(self, ticker: str):
+            assert ticker == "AAPL"
+
+        def get_filings(self, **kwargs):
+            return filings
+
+    monkeypatch.setitem(sys.modules, "edgar", SimpleNamespace(Company=FakeCompany))
+
+    rows = analytics.get_proxy_statement_data("AAPL", limit=1)
+
+    assert rows[0]["accession_number"] == "proxy-2026"
+    assert rows[0]["filing_date"] == "2026-01-08"
+    assert rows[0]["peo_total_comp"] == 74_294_811
+
+
 def test_summarize_proxy_statement_returns_latest_snapshot(monkeypatch):
     def fake_proxy(total_comp: int, filing_year: str):
         return SimpleNamespace(
@@ -484,3 +538,112 @@ def test_summarize_institutional_holdings_returns_concentration_metrics(monkeypa
     assert summary["manager_name"] == "Berkshire Hathaway Inc"
     assert summary["top_5_concentration_pct"] == 86.666667
     assert [holding["ticker"] for holding in summary["top_holdings"]] == ["AAPL", "BAC"]
+
+
+def test_get_institutional_holdings_prefers_latest_report_period(monkeypatch):
+    def make_thirteen_f(report_period: str, total_value: int, ticker: str):
+        return SimpleNamespace(
+            report_period=report_period,
+            management_company_name="Berkshire Hathaway Inc",
+            filing_signer_name="Marc D. Hamburg",
+            filing_signer_title="Senior Vice President",
+            total_value=total_value,
+            total_holdings=1,
+            holdings=pd.DataFrame(
+                [
+                    {
+                        "Issuer": "Apple Inc.",
+                        "Class": "COM",
+                        "Cusip": "037833100",
+                        "Ticker": ticker,
+                        "Value": total_value,
+                        "SharesPrnAmount": 1,
+                        "Type": "Shares",
+                        "PutCall": "",
+                        "SoleVoting": 1,
+                        "SharedVoting": 0,
+                        "NonVoting": 0,
+                    }
+                ]
+            ),
+        )
+
+    filings = [
+        SimpleNamespace(
+            accession_no="0000950123-24-011775",
+            form="13F-HR",
+            filing_date="2024-11-14",
+            cik="1067983",
+            obj=lambda: make_thirteen_f("2024-09-30", 266_380_000_000, "DVA"),
+        ),
+        SimpleNamespace(
+            accession_no="0001193125-26-054580",
+            form="13F-HR",
+            filing_date="2026-02-17",
+            cik="1067983",
+            obj=lambda: make_thirteen_f("2025-12-31", 274_160_086_701, "GOOGL"),
+        ),
+    ]
+
+    class FakeCompany:
+        def __init__(self, manager: str):
+            assert manager == "BRK"
+
+        def get_filings(self, **kwargs):
+            return filings
+
+    monkeypatch.setitem(sys.modules, "edgar", SimpleNamespace(Company=FakeCompany))
+
+    holdings = analytics.get_institutional_holdings(manager="BRK", limit=10)
+
+    assert holdings[0]["accession_number"] == "0001193125-26-054580"
+    assert holdings[0]["report_period"] == "2025-12-31"
+    assert holdings[0]["ticker"] == "GOOGL"
+
+
+def test_get_institutional_holdings_normalizes_berkshire_manager_alias(monkeypatch):
+    thirteen_f = SimpleNamespace(
+        report_period="2025-12-31",
+        management_company_name="Berkshire Hathaway Inc",
+        filing_signer_name="Marc D. Hamburg",
+        filing_signer_title="Senior Vice President",
+        total_value=274_160_086_701,
+        total_holdings=1,
+        holdings=pd.DataFrame(
+            [
+                {
+                    "Issuer": "Alphabet Inc.",
+                    "Class": "COM",
+                    "Cusip": "02079K305",
+                    "Ticker": "GOOGL",
+                    "Value": 5_585_842_446,
+                    "SharesPrnAmount": 1,
+                    "Type": "Shares",
+                    "PutCall": "",
+                    "SoleVoting": 1,
+                    "SharedVoting": 0,
+                    "NonVoting": 0,
+                }
+            ]
+        ),
+    )
+    filing = SimpleNamespace(
+        accession_no="0001193125-26-054580",
+        form="13F-HR",
+        filing_date="2026-02-17",
+        cik="1067983",
+        obj=lambda: thirteen_f,
+    )
+
+    class FakeCompany:
+        def __init__(self, manager: str):
+            assert manager == "BRK-B"
+
+        def get_filings(self, **kwargs):
+            return [filing]
+
+    monkeypatch.setitem(sys.modules, "edgar", SimpleNamespace(Company=FakeCompany))
+
+    holdings = analytics.get_institutional_holdings(manager="Berkshire Hathaway", limit=10)
+
+    assert holdings[0]["ticker"] == "GOOGL"

@@ -78,3 +78,8 @@ WEB_PORT: int = int(os.getenv("WEB_PORT", "8080"))
 LLM_API_BASE: str = os.getenv("LLM_API_BASE", "http://localhost:8000/v1")
 LLM_MODEL: str = os.getenv("LLM_MODEL", "Qwen/Qwen2.5-32B-Instruct")
 LLM_API_KEY: str = os.getenv("LLM_API_KEY", "EMPTY")
+
+# Langfuse tracing
+LANGFUSE_PUBLIC_KEY: str = os.getenv("LANGFUSE_PUBLIC_KEY", "")
+LANGFUSE_SECRET_KEY: str = os.getenv("LANGFUSE_SECRET_KEY", "")
+LANGFUSE_BASE_URL: str = os.getenv("LANGFUSE_BASE_URL", "https://cloud.langfuse.com")

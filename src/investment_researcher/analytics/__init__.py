@@ -283,6 +283,7 @@ def get_insider_trades(
     min_value: float = 0.0,
     limit: int = 200,
     include_amendments: bool = False,
+    filing_limit: int | None = None,
 ) -> list[dict[str, Any]]:
     """Return structured Form 4 transactions for a date range.
 
@@ -305,8 +306,16 @@ def get_insider_trades(
         )
         if filings is None:
             return []
+
+        ordered_filings = sorted(
+            _collect_filings(filings),
+            key=_filing_sort_key,
+            reverse=True,
+        )
         trades: list[dict[str, Any]] = []
-        for filing in filings:
+        for index, filing in enumerate(ordered_filings):
+            if filing_limit is not None and index >= filing_limit:
+                break
             try:
                 trades.extend(
                     extract_form4_trades(
@@ -375,7 +384,7 @@ def get_material_events(
     item_codes: list[str] | None = None,
     limit: int = 50,
     include_amendments: bool = False,
-    summary_chars: int = 400,
+    summary_chars: int = 2_000,
 ) -> list[dict[str, Any]]:
     """Return structured 8-K item/event rows for a company."""
     try:
@@ -428,7 +437,7 @@ def summarize_material_events(
     group_by: str = "item_code",
     limit: int = 25,
     include_amendments: bool = False,
-    summary_chars: int = 400,
+    summary_chars: int = 2_000,
 ) -> list[dict[str, Any]]:
     """Return grouped summaries of a company's 8-K material events."""
     events = get_material_events(
@@ -463,12 +472,19 @@ def get_proxy_statement_data(
         if filings is None:
             return []
 
+        ordered_filings = sorted(
+            _collect_filings(filings),
+            key=_filing_sort_key,
+            reverse=True,
+        )
         records: list[dict[str, Any]] = []
-        for filing in filings[:limit]:
+        for filing in ordered_filings:
             try:
                 record = extract_proxy_statement_record(filing)
                 if record:
                     records.append(record)
+                    if len(records) >= limit:
+                        break
             except Exception:
                 log.warning(
                     "Could not parse DEF 14A for %s / %s",
@@ -504,26 +520,65 @@ def summarize_proxy_statement(
     return summarize_proxy_statement_rows(rows)
 
 
+def _collect_filings(filings: Any) -> list[Any]:
+    """Materialize an Edgar filings collection into a Python list."""
+    if filings is None:
+        return []
+    try:
+        return list(filings)
+    except Exception:
+        try:
+            return list(filings[:])
+        except Exception:
+            return []
+
+
+def _filing_sort_key(filing: Any) -> tuple[str, str]:
+    """Sort filings by filing date, then accession number."""
+    return (
+        str(getattr(filing, "filing_date", "") or ""),
+        str(getattr(filing, "accession_no", "") or ""),
+    )
+
+
+def _normalize_institutional_manager(manager: str) -> str:
+    """Map common manager-name aliases to identifiers Edgar resolves reliably."""
+    normalized = manager.strip()
+    alias_map = {
+        "berkshire hathaway": "BRK-B",
+        "berkshire hathaway inc": "BRK-B",
+        "berkshire hathaway inc.": "BRK-B",
+    }
+    return alias_map.get(normalized.lower(), normalized)
+
+
 def _pick_thirteenf_filing(
     filings: Any,
     report_period: str | None = None,
-    scan_limit: int = 40,
 ) -> Any | None:
     """Pick the best-matching 13F filing from a filings collection."""
     if filings is None:
         return None
+    candidate_filings = _collect_filings(filings)
+    if not candidate_filings:
+        return None
     if report_period is None:
-        if hasattr(filings, "latest"):
+        best_filing = None
+        best_key = ("", "", "")
+        for filing in candidate_filings:
+            filing_report_period = ""
             try:
-                return filings.latest()
+                thirteen_f = filing.obj()
+                filing_report_period = str(getattr(thirteen_f, "report_period", "") or "")
             except Exception:
-                pass
-        try:
-            return filings[0]
-        except Exception:
-            return None
+                filing_report_period = ""
+            filing_key = (filing_report_period,) + _filing_sort_key(filing)
+            if filing_key > best_key:
+                best_key = filing_key
+                best_filing = filing
+        return best_filing
 
-    for filing in filings[:scan_limit]:
+    for filing in candidate_filings:
         try:
             thirteen_f = filing.obj()
         except Exception:
@@ -546,7 +601,7 @@ def get_institutional_holdings(
     try:
         from edgar import Company as EdgarCompany
 
-        entity = EdgarCompany(manager.strip())
+        entity = EdgarCompany(_normalize_institutional_manager(manager))
         filings = entity.get_filings(
             form="13F-HR",
             filing_date=_build_filing_date_filter(start_date, end_date),

@@ -19,6 +19,8 @@ dependencies = [
     "sse-starlette>=2.0",
     "openai>=1.0",
     "openai-agents>=0.14.0",
+    "langfuse>=4.5.1",
+    "openinference-instrumentation-openai-agents>=1.4.1",
 ]
 
 [project.optional-dependencies]
