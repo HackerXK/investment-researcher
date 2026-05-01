@@ -7,7 +7,7 @@ Four main workflows:
 
 - Run the long-lived ingestion service with Docker Compose.
 - Develop and test the ingestion and ratio code locally.
-- Explore the populated DuckDB database with the multi-tab Streamlit analytics dashboard.
+- Explore the populated DuckDB database with the Nuxt 3 frontend web app.
 - Chat with an AI financial analyst powered by the OpenAI Agents SDK that can autonomously query financials, compute ratios, and read SEC filings.
 
 ## Architecture
@@ -167,7 +167,7 @@ Primary columns: `ticker`, `metric_type`, `value`, `period`, `period_type`, `per
 ```bash
 uv venv --python 3.12 .venv
 source .venv/bin/activate
-uv pip install -e ".[dev,demo]"
+uv pip install -e ".[dev]"
 cp .env.example .env
 ```
 
@@ -262,25 +262,17 @@ curl -X POST http://localhost:8080/api/companies/slow-path/rerun \
 
 The default Docker Compose `api` container mounts DuckDB read-only, so Docker-based reruns should go through `ir-service`. If you need fresh bulk SEC metadata before re-extracting, refresh metadata separately first, then run the targeted rerun.
 
-## Streamlit Demo
+## Nuxt Web App
 
-The demo is a multi-tab financial analytics dashboard that reads directly from DuckDB. Populate the database first (via Docker or a local seed run), then launch:
+The Nuxt frontend replaces the old Streamlit demo. Populate the database first (via Docker or a local seed run), then launch the web app from `frontend/`:
 
 ```bash
-streamlit run src/investment_researcher/demo/app.py
+cd frontend
+npm install
+npm run dev
 ```
 
-**Dashboard tabs:**
-
-| Tab | Contents |
-|-----|----------|
-| Income Statement | Revenue vs. net income trends, earnings waterfall, period detail table |
-| Balance Sheet | Assets / liabilities / equity comparisons, composition breakdowns |
-| Cash Flow | OCF / investing / financing flows, FCF trend, CapEx and dividends |
-| Financial Health | Radar chart across 6 dimensions (profitability, ROE, liquidity, debt health, growth, cash generation) plus ratio cards with TTM deltas |
-| Financial Ratios | All ~46 computed ratios organized by category with metric cards and time-series charts |
-| Growth & Margins | YoY revenue and earnings growth, profitability margins trends, earnings quality (net income vs. OCF) |
-| Quarterly Detail | Discrete 10-quarter breakdown with a TTM summary column |
+The frontend provides the company dashboard, chat panel, financial tables, and charts.
 
 ## Agentic Chat
 
@@ -474,9 +466,6 @@ Each data store has a `_HOST_SOURCE` variable (Docker bind mount source on the h
 │   │   ├── app.py                  # FastAPI REST API + chat endpoint
 │   │   ├── chat.py                 # Agentic chat — Agent + Runner streaming
 │   │   └── agent_tools.py          # 18 @function_tool wrappers for analytics
-│   ├── demo/
-│   │   ├── app.py                  # 7-tab Streamlit analytics dashboard
-│   │   └── data.py                 # DuckDB query helpers for the dashboard
 │   ├── flows/
 │   │   └── sec_data.py             # Seed, fast-path, and slow-path Prefect flows
 │   └── ingestion/
