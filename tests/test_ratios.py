@@ -4,10 +4,12 @@ Compares ratios computed from SEC EDGAR raw metrics against FMP golden data.
 Uses the same module-scoped extraction pattern as test_golden_companies.py.
 """
 
+import importlib
 import os
 import tempfile
 from datetime import date, timedelta
 
+import pandas as pd
 import pytest
 
 os.environ.setdefault("EDGAR_IDENTITY", "test@example.com")
@@ -37,7 +39,7 @@ from golden_ttm_ratios_xom import XOM_TTM_GOLDEN_RATIOS
 
 from investment_researcher.ingestion.edgar.financials import extract_company_facts
 from investment_researcher.ingestion.state import initialize_state_db
-from investment_researcher.ingestion.timeseries import get_connection, initialize_db
+from investment_researcher.ingestion.timeseries import get_connection, initialize_db, write_financial_metrics
 from investment_researcher.ratios import (
     RATIO_NAMES,
     RATIO_REGISTRY,
@@ -70,6 +72,11 @@ GOLDEN_TTM_DATA = {
     "UNH": UNH_TTM_GOLDEN_RATIOS,
     "WMT": WMT_TTM_GOLDEN_RATIOS,
     "XOM": XOM_TTM_GOLDEN_RATIOS,
+}
+
+TTM_GOLDEN_AS_OF_DATES = {
+    ticker: getattr(importlib.import_module(f"golden_ttm_ratios_{ticker.lower()}"), "GOLDEN_AS_OF", None)
+    for ticker in TICKERS
 }
 
 
@@ -217,10 +224,28 @@ def test_ratio_registry_completeness():
 
 @pytest.fixture(scope="module")
 def ttm_ratios(ratio_db_paths) -> dict[str, dict[str, float]]:
-    """Compute TTM ratios for each ticker, return {ticker: {ratio_name: value}}."""
+    """Compute latest TTM ratios for each ticker."""
     result = {}
     for ticker, db_path in ratio_db_paths.items():
         result[ticker] = compute_ttm_ratios(ticker, db_path=db_path)
+    return result
+
+
+@pytest.fixture(scope="module")
+def golden_ttm_ratios(ratio_db_paths) -> dict[str, dict[str, float]]:
+    """Compute TTM ratios for each ticker, return {ticker: {ratio_name: value}}."""
+    result = {}
+    for ticker, db_path in ratio_db_paths.items():
+        as_of_date = TTM_GOLDEN_AS_OF_DATES.get(ticker)
+        assert as_of_date is not None, (
+            f"Missing GOLDEN_AS_OF for {ticker}; add GOLDEN_AS_OF to "
+            f"tests/fixtures/golden_ttm_ratios_{ticker.lower()}.py"
+        )
+        result[ticker] = compute_ttm_ratios(
+            ticker,
+            db_path=db_path,
+            as_of_date=as_of_date,
+        )
     return result
 
 
@@ -244,9 +269,9 @@ def _build_ttm_ratio_params():
 
 @pytest.mark.integration
 @pytest.mark.parametrize(("ticker", "golden"), _build_ttm_ratio_params())
-def test_ttm_ratio_matches_fmp_golden(ttm_ratios, ticker, golden):
+def test_ttm_ratio_matches_fmp_golden(golden_ttm_ratios, ticker, golden):
     """Each computed TTM ratio should match FMP golden value within tolerance."""
-    computed = ttm_ratios[ticker]
+    computed = golden_ttm_ratios[ticker]
     actual = computed.get(golden.ratio_name)
     if actual is None:
         pytest.skip(f"No computed TTM {golden.ratio_name} for {ticker}")
@@ -272,3 +297,109 @@ def test_ttm_ratios_no_crash_on_all_tickers(ratio_db_paths):
     for ticker, db_path in ratio_db_paths.items():
         result = compute_ttm_ratios(ticker, db_path=db_path)
         assert isinstance(result, dict)
+
+
+def test_compute_ttm_ratios_respects_as_of_date(tmp_path):
+    db_path = tmp_path / "ttm_ratio_as_of.duckdb"
+    initialize_db(db_path=str(db_path))
+
+    rows = pd.DataFrame([
+        {
+            "ticker": "TEST",
+            "metric_type": "revenue",
+            "value": 100.0,
+            "period": "Quarter Ended 03/31/2025",
+            "period_type": "quarterly",
+            "period_end": "2025-03-31",
+        },
+        {
+            "ticker": "TEST",
+            "metric_type": "revenue",
+            "value": 100.0,
+            "period": "Quarter Ended 06/30/2025",
+            "period_type": "quarterly",
+            "period_end": "2025-06-30",
+        },
+        {
+            "ticker": "TEST",
+            "metric_type": "revenue",
+            "value": 100.0,
+            "period": "Quarter Ended 09/30/2025",
+            "period_type": "quarterly",
+            "period_end": "2025-09-30",
+        },
+        {
+            "ticker": "TEST",
+            "metric_type": "revenue",
+            "value": 100.0,
+            "period": "Quarter Ended 12/31/2025",
+            "period_type": "quarterly",
+            "period_end": "2025-12-31",
+        },
+        {
+            "ticker": "TEST",
+            "metric_type": "revenue",
+            "value": 200.0,
+            "period": "Quarter Ended 03/31/2026",
+            "period_type": "quarterly",
+            "period_end": "2026-03-31",
+        },
+        {
+            "ticker": "TEST",
+            "metric_type": "net_income",
+            "value": 10.0,
+            "period": "Quarter Ended 03/31/2025",
+            "period_type": "quarterly",
+            "period_end": "2025-03-31",
+        },
+        {
+            "ticker": "TEST",
+            "metric_type": "net_income",
+            "value": 10.0,
+            "period": "Quarter Ended 06/30/2025",
+            "period_type": "quarterly",
+            "period_end": "2025-06-30",
+        },
+        {
+            "ticker": "TEST",
+            "metric_type": "net_income",
+            "value": 10.0,
+            "period": "Quarter Ended 09/30/2025",
+            "period_type": "quarterly",
+            "period_end": "2025-09-30",
+        },
+        {
+            "ticker": "TEST",
+            "metric_type": "net_income",
+            "value": 10.0,
+            "period": "Quarter Ended 12/31/2025",
+            "period_type": "quarterly",
+            "period_end": "2025-12-31",
+        },
+        {
+            "ticker": "TEST",
+            "metric_type": "net_income",
+            "value": 10.0,
+            "period": "Quarter Ended 03/31/2026",
+            "period_type": "quarterly",
+            "period_end": "2026-03-31",
+        },
+    ])
+    rows["currency"] = "USD"
+    rows["source"] = "test"
+    rows["accession"] = ""
+    write_financial_metrics(rows, db_path=str(db_path))
+
+    historical = compute_ttm_ratios(
+        "TEST",
+        db_path=str(db_path),
+        as_of_date="2025-12-31",
+    )
+    latest = compute_ttm_ratios(
+        "TEST",
+        db_path=str(db_path),
+        as_of_date="2026-03-31",
+    )
+
+    assert historical["net_profit_margin"] == pytest.approx(0.1)
+    assert latest["net_profit_margin"] == pytest.approx(0.08)

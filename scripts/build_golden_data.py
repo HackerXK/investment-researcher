@@ -11,6 +11,7 @@ Python code ready to paste into tests/fixtures/golden_{ticker}.py.
 Usage:
     FMP_API_KEY=your_key python scripts/build_golden_data.py           # all companies
     FMP_API_KEY=your_key python scripts/build_golden_data.py AAPL NVDA # specific tickers
+    FMP_API_KEY=your_key python scripts/build_golden_data.py --as-of 2025-12-31 AMZN
 
 Environment variables:
     FMP_API_KEY  — Required. Free-tier API key from financialmodelingprep.com.
@@ -747,7 +748,11 @@ FLOW_METRICS = {{
     print("}")
 
 
-def print_golden_ttm_module(ticker: str, ttm_data: dict[str, float]) -> None:
+def print_golden_ttm_module(
+    ticker: str,
+    ttm_data: dict[str, float],
+    as_of_date: date | None = None,
+) -> None:
     """Print structured Python code for tests/fixtures/golden_ttm_{ticker}.py."""
     ticker_upper = ticker.upper()
     ticker_lower = ticker.lower()
@@ -765,10 +770,17 @@ that compute_ttm_metrics() produces correct output.
 Source: Financial Modeling Prep (FMP) API TTM endpoints.
 Note: TTM values are point-in-time snapshots. Re-run the builder when data
 changes after a new earnings release.
-"""
+"""''')
 
-from golden_helpers import GoldenTTMMetric
-''')
+    if as_of_date is not None:
+        print("from datetime import date")
+    print("from golden_helpers import GoldenTTMMetric")
+    if as_of_date is not None:
+        print()
+        print(
+            f"GOLDEN_AS_OF = date({as_of_date.year}, {as_of_date.month}, {as_of_date.day})"
+        )
+    print()
 
     print(f"{ticker_upper}_TTM_GOLDEN: list[GoldenTTMMetric] = [")
     for metric_type in sorted(ttm_data.keys()):
@@ -779,12 +791,34 @@ from golden_helpers import GoldenTTMMetric
     print("]")
 
 
+def _parse_cli_args(argv: list[str]) -> tuple[list[str], date | None]:
+    tickers: list[str] = []
+    as_of_date: date | None = None
+
+    index = 0
+    while index < len(argv):
+        arg = argv[index]
+        if arg == "--as-of":
+            index += 1
+            if index >= len(argv):
+                raise SystemExit("ERROR: --as-of requires a YYYY-MM-DD value")
+            as_of_date = date.fromisoformat(argv[index])
+        elif arg.startswith("--as-of="):
+            as_of_date = date.fromisoformat(arg.split("=", 1)[1])
+        else:
+            tickers.append(arg.upper())
+        index += 1
+
+    return tickers, as_of_date
+
+
 def main():
     api_key = os.environ.get("FMP_API_KEY", "")
+    requested_tickers, as_of_date = _parse_cli_args(sys.argv[1:])
 
     # Determine which tickers to process
-    if len(sys.argv) > 1:
-        tickers = [t.upper() for t in sys.argv[1:]]
+    if requested_tickers:
+        tickers = requested_tickers
         for t in tickers:
             if t not in COMPANIES:
                 print(f"Unknown ticker: {t}. Available: {', '.join(COMPANIES.keys())}")
@@ -825,7 +859,7 @@ def main():
             print(f"  Total FMP TTM values: {len(ttm_data)}")
             if ttm_data:
                 print(f"\n═══ Phase 6: TTM golden data module output for {ticker} ═══")
-                print_golden_ttm_module(ticker, ttm_data)
+                print_golden_ttm_module(ticker, ttm_data, as_of_date=as_of_date)
         else:
             print(f"\n═══ Phase 5: Skipping FMP TTM (no FMP_API_KEY set) ═══")
 

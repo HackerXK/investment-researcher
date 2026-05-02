@@ -136,6 +136,16 @@ def assert_ttm_metric_close(actual: float, golden: "GoldenTTMMetric", label: str
     assert_value_close(actual, golden, label)
 
 
+def _coerce_period_end(value) -> date | None:
+    if value is None:
+        return None
+    if hasattr(value, "date"):
+        return value.date()
+    if isinstance(value, str):
+        return date.fromisoformat(value)
+    return value
+
+
 def extract_ticker_rows(ticker: str) -> list[dict]:
     """Extract data for a ticker and return all rows from DuckDB."""
     edgar.set_identity("test@example.com")

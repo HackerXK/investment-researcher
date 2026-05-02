@@ -6,6 +6,9 @@ Used to validate that compute_ttm_ratios() produces correct output.
 
 from golden_helpers import GoldenTTMRatio
 
+# Anchor date for this TTM snapshot (chosen by best-fit probe)
+GOLDEN_AS_OF = "2026-01-01"
+
 AMZN_TTM_GOLDEN_RATIOS: list[GoldenTTMRatio] = [
     GoldenTTMRatio('asset_turnover', 0.8763902097936291, 'fmp', 15.0),
     GoldenTTMRatio('book_value_per_share', 38.385003268279014, 'fmp', 20.0),

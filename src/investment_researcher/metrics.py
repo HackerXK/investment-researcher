@@ -10,6 +10,8 @@ This module owns:
 
 from __future__ import annotations
 
+from datetime import date, datetime
+
 import duckdb
 import numpy as np
 
@@ -38,6 +40,16 @@ def _get(m: dict[str, float], key: str) -> float | None:
     if _is_missing_number(v):
         return None
     return v
+
+
+def _coerce_as_of_date(value: date | datetime | str | None) -> date | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    return date.fromisoformat(value)
 
 
 def derive_free_cash_flow(
@@ -166,6 +178,7 @@ _FLOW_PH = ", ".join(f"'{m}'" for m in FLOW_METRICS)
 def compute_ttm_metrics(
     ticker: str,
     db_path: str | None = None,
+    as_of_date: date | datetime | str | None = None,
 ) -> dict[str, float]:
     """Compute TTM (Trailing Twelve Months) raw metrics for *ticker*.
 
@@ -181,24 +194,30 @@ def compute_ttm_metrics(
         dict mapping metric_type → TTM value.
     """
     path = db_path or DUCKDB_PATH_RUNTIME
+    cutoff_date = _coerce_as_of_date(as_of_date)
     con = duckdb.connect(path, read_only=True)
     try:
-        latest_quarterly_pe_row = con.execute(
-            """
+        latest_quarterly_query = """
             SELECT MAX(period_end)
             FROM financial_metrics
             WHERE ticker = $1
               AND period_type = 'quarterly'
-            """,
-            [ticker],
+        """
+        latest_quarterly_params: list[object] = [ticker]
+        if cutoff_date is not None:
+            latest_quarterly_query += "\n              AND period_end <= $2"
+            latest_quarterly_params.append(cutoff_date)
+
+        latest_quarterly_pe_row = con.execute(
+            latest_quarterly_query,
+            latest_quarterly_params,
         ).fetchone()
         latest_quarterly_pe = latest_quarterly_pe_row[0] if latest_quarterly_pe_row else None
         if hasattr(latest_quarterly_pe, "date"):
             latest_quarterly_pe = latest_quarterly_pe.date()
 
         # ── Flow metrics: sum of 4 most recent quarters ───────────────
-        flow_df = con.execute(
-            f"""
+        flow_query = f"""
             WITH ranked AS (
                 SELECT metric_type, value, period_end,
                        ROW_NUMBER() OVER (
@@ -209,12 +228,17 @@ def compute_ttm_metrics(
                 WHERE ticker = $1
                   AND period_type = 'quarterly'
                   AND metric_type IN ({_FLOW_PH})
+        """
+        flow_params: list[object] = [ticker]
+        if cutoff_date is not None:
+            flow_query += "\n                  AND period_end <= $2"
+            flow_params.append(cutoff_date)
+        flow_query += """
             )
             SELECT metric_type, value, period_end
             FROM ranked WHERE rn <= 4
-            """,
-            [ticker],
-        ).df()
+            """
+        flow_df = con.execute(flow_query, flow_params).df()
 
         ttm: dict[str, float] = {}
         if latest_quarterly_pe is not None and not flow_df.empty:
@@ -232,8 +256,7 @@ def compute_ttm_metrics(
                 ttm[metric_type] = float(metric_rows["value"].sum())
 
         # ── Stock metrics: latest quarterly snapshot ──────────────────
-        stock_df = con.execute(
-            f"""
+        stock_query = f"""
             WITH ranked AS (
                 SELECT metric_type, value, period_end,
                        ROW_NUMBER() OVER (
@@ -244,11 +267,16 @@ def compute_ttm_metrics(
                 WHERE ticker = $1
                   AND period_type = 'quarterly'
                   AND metric_type NOT IN ({_FLOW_PH})
+        """
+        stock_params: list[object] = [ticker]
+        if cutoff_date is not None:
+            stock_query += "\n                  AND period_end <= $2"
+            stock_params.append(cutoff_date)
+        stock_query += """
             )
             SELECT metric_type, value, period_end FROM ranked WHERE rn = 1
-            """,
-            [ticker],
-        ).df()
+            """
+        stock_df = con.execute(stock_query, stock_params).df()
 
         latest_stock_pe = stock_df["period_end"].max() if not stock_df.empty else None
         for _, row in stock_df.iterrows():
@@ -271,10 +299,11 @@ def compute_ttm_metrics(
                 WHERE ticker = $1
                   AND period_type IN ('quarterly', 'annual')
                   AND metric_type IN ('common_shares_outstanding', 'total_current_assets', 'total_current_liabilities')
+                                    AND ($2 IS NULL OR period_end <= $2)
             )
             SELECT metric_type, value, period_end FROM ranked WHERE rn = 1
             """,
-            [ticker],
+                        [ticker, cutoff_date],
         ).df()
 
         for _, row in fallback_df.iterrows():

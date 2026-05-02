@@ -4,8 +4,29 @@ Values from Financial Modeling Prep (FMP) TTM API endpoints.
 Used to validate that compute_ttm_ratios() produces correct output.
 """
 
+# TODO: The following ratios were removed from RATIO_REGISTRY and their golden
+# entries removed here.  Re-add golden entries when the ratios are re-enabled:
+#   - quick_ratio (needs cash+STI+AR formula + ReceivablesNetCurrent from XBRL)
+#   - debt_to_equity_ratio (needs lease liabilities in debt calculation)
+#   - debt_to_assets_ratio (needs lease liabilities in debt calculation)
+#   - debt_to_capital_ratio (needs lease liabilities in debt calculation)
+#   - net_debt_to_ebitda (needs lease liabilities in debt + near-zero instability)
+#   - receivables_turnover (needs ReceivablesNetCurrent from XBRL)
+#   - inventory_turnover (needs sector-specific inventory classification)
 from golden_helpers import GoldenTTMRatio
 
+# Anchor date for this TTM snapshot (chosen by best-fit probe)
+GOLDEN_AS_OF = "2026-01-31"
+
+# TODO: The following ratios were removed from RATIO_REGISTRY and their golden
+# entries removed here.  Re-add golden entries when the ratios are re-enabled:
+#   - quick_ratio (needs cash+STI+AR formula + ReceivablesNetCurrent from XBRL)
+#   - debt_to_equity_ratio (needs lease liabilities in debt calculation)
+#   - debt_to_assets_ratio (needs lease liabilities in debt calculation)
+#   - debt_to_capital_ratio (needs lease liabilities in debt calculation)
+#   - net_debt_to_ebitda (needs lease liabilities in debt + near-zero instability)
+#   - receivables_turnover (needs ReceivablesNetCurrent from XBRL)
+#   - inventory_turnover (needs sector-specific inventory classification)
 # TODO: The following ratios were removed from RATIO_REGISTRY and their golden
 # entries removed here.  Re-add golden entries when the ratios are re-enabled:
 #   - quick_ratio (needs cash+STI+AR formula + ReceivablesNetCurrent from XBRL)

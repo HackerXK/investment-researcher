@@ -13,6 +13,7 @@ Usage:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date, datetime
 from typing import Callable
 
 import duckdb
@@ -508,6 +509,7 @@ def latest_ratios(
 def compute_ttm_ratios(
     ticker: str,
     db_path: str | None = None,
+    as_of_date: date | datetime | str | None = None,
 ) -> dict[str, float]:
     """Compute TTM (Trailing Twelve Months) ratios for *ticker*.
 
@@ -517,7 +519,7 @@ def compute_ttm_ratios(
     Returns:
         dict mapping ratio_name → value (single snapshot).
     """
-    metric_row = compute_ttm_metrics(ticker, db_path=db_path)
+    metric_row = compute_ttm_metrics(ticker, db_path=db_path, as_of_date=as_of_date)
 
     result: dict[str, float] = {}
     for rdef in RATIO_REGISTRY:

@@ -6,6 +6,9 @@ Used to validate that compute_ttm_ratios() produces correct output.
 
 from golden_helpers import GoldenTTMRatio
 
+# Anchor date for this TTM snapshot (chosen by best-fit probe)
+GOLDEN_AS_OF = "2026-01-01"
+
 # TODO: The following ratios were removed from RATIO_REGISTRY and their golden
 # entries removed here.  Re-add golden entries when the ratios are re-enabled:
 #   - quick_ratio (needs cash+STI+AR formula + ReceivablesNetCurrent from XBRL)

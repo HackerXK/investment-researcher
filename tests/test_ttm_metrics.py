@@ -32,6 +32,7 @@ from investment_researcher.metrics import compute_ttm_metrics
 TICKERS = ["AAPL", "AMZN", "NVDA", "UNH", "WMT", "XOM"]
 
 GOLDEN_TTM_DATA: dict[str, list[GoldenTTMMetric]] = {}
+TTM_GOLDEN_AS_OF_DATES: dict[str, object] = {}
 
 _TTM_GOLDEN_MODULES = {
     "AAPL": ("tests.fixtures.golden_ttm_aapl", "AAPL_TTM_GOLDEN"),
@@ -45,6 +46,9 @@ for _ticker, (_mod_name, _attr) in _TTM_GOLDEN_MODULES.items():
     try:
         _mod = importlib.import_module(_mod_name)
         GOLDEN_TTM_DATA[_ticker] = getattr(_mod, _attr)
+        _as_of = getattr(_mod, "GOLDEN_AS_OF", None)
+        if _as_of is not None:
+            TTM_GOLDEN_AS_OF_DATES[_ticker] = _as_of
     except ImportError:
         pass
 
@@ -79,6 +83,25 @@ def ttm_metrics(ttm_db_paths) -> dict[str, dict[str, float]]:
     return result
 
 
+@pytest.fixture(scope="module")
+def golden_ttm_metrics(ttm_db_paths) -> dict[str, dict[str, float]]:
+    """Compute anchored TTM metrics for golden comparisons."""
+    result = {}
+    for ticker, golden_entries in GOLDEN_TTM_DATA.items():
+        db_path = ttm_db_paths[ticker]
+        as_of_date = TTM_GOLDEN_AS_OF_DATES.get(ticker)
+        assert as_of_date is not None, (
+            f"Missing GOLDEN_AS_OF for {ticker}; add GOLDEN_AS_OF to "
+            f"tests/fixtures/golden_ttm_{ticker.lower()}.py"
+        )
+        result[ticker] = compute_ttm_metrics(
+            ticker,
+            db_path=db_path,
+            as_of_date=as_of_date,
+        )
+    return result
+
+
 # ── Build parametrized test cases ────────────────────────────────────────────
 
 def _build_ttm_metric_params():
@@ -100,9 +123,9 @@ def _build_ttm_metric_params():
 @pytest.mark.integration
 @pytest.mark.skipif(not _HAS_GOLDEN, reason="No golden TTM fixture files found")
 @pytest.mark.parametrize(("ticker", "golden"), _build_ttm_metric_params())
-def test_ttm_metric_matches_fmp_golden(ttm_metrics, ticker, golden):
+def test_ttm_metric_matches_fmp_golden(golden_ttm_metrics, ticker, golden):
     """Each TTM metric should match FMP golden value within tolerance."""
-    computed = ttm_metrics[ticker]
+    computed = golden_ttm_metrics[ticker]
     actual = computed.get(golden.metric_type)
     if actual is None:
         pytest.skip(f"No computed TTM {golden.metric_type} for {ticker}")
@@ -231,3 +254,97 @@ def test_ttm_metrics_excludes_stale_flow_series(tmp_path):
 
     assert metrics["revenue"] == 460.0
     assert "gross_profit" not in metrics
+
+
+def test_ttm_metrics_respects_as_of_date_cutoff(tmp_path):
+    db_path = tmp_path / "ttm_as_of.duckdb"
+    initialize_db(db_path=str(db_path))
+
+    rows = pd.DataFrame([
+        {
+            "ticker": "TEST",
+            "metric_type": "revenue",
+            "value": 100.0,
+            "currency": "USD",
+            "period": "Quarter Ended 03/31/2025",
+            "period_type": "quarterly",
+            "period_end": "2025-03-31",
+            "source": "test",
+            "accession": "",
+        },
+        {
+            "ticker": "TEST",
+            "metric_type": "revenue",
+            "value": 110.0,
+            "currency": "USD",
+            "period": "Quarter Ended 06/30/2025",
+            "period_type": "quarterly",
+            "period_end": "2025-06-30",
+            "source": "test",
+            "accession": "",
+        },
+        {
+            "ticker": "TEST",
+            "metric_type": "revenue",
+            "value": 120.0,
+            "currency": "USD",
+            "period": "Quarter Ended 09/30/2025",
+            "period_type": "quarterly",
+            "period_end": "2025-09-30",
+            "source": "test",
+            "accession": "",
+        },
+        {
+            "ticker": "TEST",
+            "metric_type": "revenue",
+            "value": 130.0,
+            "currency": "USD",
+            "period": "Quarter Ended 12/31/2025",
+            "period_type": "quarterly",
+            "period_end": "2025-12-31",
+            "source": "test",
+            "accession": "",
+        },
+        {
+            "ticker": "TEST",
+            "metric_type": "revenue",
+            "value": 140.0,
+            "currency": "USD",
+            "period": "Quarter Ended 03/31/2026",
+            "period_type": "quarterly",
+            "period_end": "2026-03-31",
+            "source": "test",
+            "accession": "",
+        },
+        {
+            "ticker": "TEST",
+            "metric_type": "cash",
+            "value": 50.0,
+            "currency": "USD",
+            "period": "Quarter Ended 12/31/2025",
+            "period_type": "quarterly",
+            "period_end": "2025-12-31",
+            "source": "test",
+            "accession": "",
+        },
+        {
+            "ticker": "TEST",
+            "metric_type": "cash",
+            "value": 60.0,
+            "currency": "USD",
+            "period": "Quarter Ended 03/31/2026",
+            "period_type": "quarterly",
+            "period_end": "2026-03-31",
+            "source": "test",
+            "accession": "",
+        },
+    ])
+    write_financial_metrics(rows, db_path=str(db_path))
+
+    historical = compute_ttm_metrics("TEST", db_path=str(db_path), as_of_date="2025-12-31")
+    latest = compute_ttm_metrics("TEST", db_path=str(db_path), as_of_date="2026-03-31")
+
+    assert historical["revenue"] == 460.0
+    assert historical["cash"] == 50.0
+    assert latest["revenue"] == 500.0
+    assert latest["cash"] == 60.0

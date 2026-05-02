@@ -4,6 +4,7 @@
 Usage:
     FMP_API_KEY=your_key python scripts/build_golden_ttm_ratios.py
     FMP_API_KEY=your_key python scripts/build_golden_ttm_ratios.py AMZN
+    FMP_API_KEY=your_key python scripts/build_golden_ttm_ratios.py --as-of 2025-12-31 AMZN
 
 Fetches from:
   - /stable/ratios-ttm?symbol={TICKER}
@@ -14,6 +15,7 @@ Outputs tests/fixtures/golden_ttm_ratios_{ticker}.py for each ticker.
 
 import os
 import sys
+from datetime import date
 from pathlib import Path
 
 import requests
@@ -143,7 +145,12 @@ def extract_ttm_ratios(
     return results
 
 
-def generate_golden_file(ticker: str, entries: list[dict], outdir: Path) -> Path:
+def generate_golden_file(
+    ticker: str,
+    entries: list[dict],
+    outdir: Path,
+    as_of_date: date | None = None,
+) -> Path:
     """Write a golden_ttm_ratios_{ticker}.py file."""
     # De-duplicate by ratio_name (keep first)
     seen = set()
@@ -162,10 +169,23 @@ def generate_golden_file(ticker: str, entries: list[dict], outdir: Path) -> Path
         "Used to validate that compute_ttm_ratios() produces correct output.",
         '"""',
         "",
-        "from golden_helpers import GoldenTTMRatio",
-        "",
-        f"{ticker}_TTM_GOLDEN_RATIOS: list[GoldenTTMRatio] = [",
     ]
+    if as_of_date is not None:
+        lines.extend([
+            "from datetime import date",
+            "from golden_helpers import GoldenTTMRatio",
+            "",
+            f"GOLDEN_AS_OF = date({as_of_date.year}, {as_of_date.month}, {as_of_date.day})",
+            "",
+        ])
+    else:
+        lines.extend([
+            "from golden_helpers import GoldenTTMRatio",
+            "",
+        ])
+    lines.extend([
+        f"{ticker}_TTM_GOLDEN_RATIOS: list[GoldenTTMRatio] = [",
+    ])
     for e in unique:
         lines.append(
             f"    GoldenTTMRatio({e['ratio_name']!r}, {e['value']!r}, 'fmp', {e['tolerance_pct']}),",
@@ -178,6 +198,28 @@ def generate_golden_file(ticker: str, entries: list[dict], outdir: Path) -> Path
     return outpath
 
 
+def _parse_cli_args(argv: list[str]) -> tuple[list[str], date | None]:
+    tickers: list[str] = []
+    as_of_date: date | None = None
+
+    index = 0
+    while index < len(argv):
+        arg = argv[index]
+        if arg == "--as-of":
+            index += 1
+            if index >= len(argv):
+                print("ERROR: --as-of requires a YYYY-MM-DD value", file=sys.stderr)
+                sys.exit(1)
+            as_of_date = date.fromisoformat(argv[index])
+        elif arg.startswith("--as-of="):
+            as_of_date = date.fromisoformat(arg.split("=", 1)[1])
+        else:
+            tickers.append(arg.upper())
+        index += 1
+
+    return tickers, as_of_date
+
+
 def main():
     api_key = os.environ.get("FMP_API_KEY")
     if not api_key:
@@ -186,7 +228,8 @@ def main():
 
     outdir = PROJECT_ROOT / "tests" / "fixtures"
 
-    tickers = [t.upper() for t in sys.argv[1:]] if len(sys.argv) > 1 else TICKERS
+    tickers, as_of_date = _parse_cli_args(sys.argv[1:])
+    tickers = tickers or TICKERS
     unknown = sorted(set(tickers) - set(TICKERS))
     if unknown:
         print(f"ERROR: Unknown ticker(s): {', '.join(unknown)}", file=sys.stderr)
@@ -207,7 +250,7 @@ def main():
         km_records = fetch_fmp_ttm("key-metrics-ttm", ticker, api_key)
         all_entries.extend(extract_ttm_ratios(ticker, km_records, KEY_METRICS_TTM_MAP))
 
-        outpath = generate_golden_file(ticker, all_entries, outdir)
+        outpath = generate_golden_file(ticker, all_entries, outdir, as_of_date=as_of_date)
         print(f"  → {outpath.name}: {len(all_entries)} TTM entries")
 
     print("\nDone!")
