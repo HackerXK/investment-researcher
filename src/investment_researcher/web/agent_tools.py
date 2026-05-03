@@ -21,6 +21,7 @@ from investment_researcher.analytics import (
     get_company_profile as _get_company_profile,
     get_filing_section as _get_filing_section,
     get_filing_sections as _get_filing_sections,
+    search_filing_text as _search_filing_text,
     get_filings_list as _get_filings_list,
     get_filing_text as _get_filing_text,
     get_insider_trades as _get_insider_trades,
@@ -521,6 +522,39 @@ def read_filing_section(
 
 
 @function_tool
+def search_filing_text(
+    ticker: str,
+    accession_number: str,
+    query: str,
+    section_name: str | None = None,
+    max_matches: int = 5,
+    context_chars: int = 280,
+) -> str:
+    """Search filing text and return compact evidence excerpts as JSON.
+
+    Prefer this when the question targets a specific phrase or theme inside a
+    filing, but not an entire item section.
+
+    Args:
+        ticker: Stock ticker symbol.
+        accession_number: SEC accession number from list_filings.
+        query: Case-insensitive phrase to search for.
+        section_name: Optional item code or section title to constrain the search.
+        max_matches: Maximum number of excerpt matches to return.
+        context_chars: Approximate characters of context to include around each match.
+    """
+    results = _search_filing_text(
+        ticker=ticker,
+        accession_number=accession_number,
+        query=query,
+        section_name=section_name,
+        max_matches=max_matches,
+        context_chars=context_chars,
+    )
+    return json.dumps(results, default=str)
+
+
+@function_tool
 def get_insider_trades(
     ticker: str,
     start_date: str,
@@ -839,6 +873,7 @@ ALL_TOOLS = [
     list_filings,
     list_filing_sections,
     read_filing_section,
+    search_filing_text,
     read_filing,
     get_insider_trades,
     summarize_insider_sells,

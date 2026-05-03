@@ -733,3 +733,93 @@ None.
     assert section["heading"] == "Item 1A. Risk Factors"
     assert "Actual risk discussion that should be surfaced." in section["content"]
     assert "## Item 1A. Risk Factors" in section["content"]
+
+
+def test_search_filing_text_avoids_toc_hits(monkeypatch):
+    filing_text = """# NVIDIA CORPORATION
+
+Item 1. Business
+Item 1A. Risk Factors
+Item 1B. Unresolved Staff Comments
+
+## Item 1. Business
+Actual business discussion.
+
+## Item 1A. Risk Factors
+Actual risk discussion that should be surfaced.
+More risk detail.
+
+## Item 1B. Unresolved Staff Comments
+None.
+"""
+    filing = SimpleNamespace(
+        accession_no="0001045810-26-000010",
+        form="10-K",
+        filing_date="2026-02-20",
+        markdown=lambda: filing_text,
+    )
+
+    class FakeCompany:
+        def __init__(self, ticker: str):
+            assert ticker == "NVDA"
+
+        def get_filings(self):
+            return [filing]
+
+    monkeypatch.setitem(sys.modules, "edgar", SimpleNamespace(Company=FakeCompany))
+
+    matches = analytics.search_filing_text(
+        "NVDA",
+        "0001045810-26-000010",
+        "risk factors",
+        max_matches=1,
+    )
+
+    assert len(matches) == 1
+    assert matches[0]["item_code"] == "1A"
+    assert matches[0]["heading"] == "Item 1A. Risk Factors"
+    assert matches[0]["line_number"] == 10
+    assert matches[0]["excerpt"].startswith("## Item 1A. Risk Factors")
+    assert "Actual risk discussion that should be surfaced." in matches[0]["excerpt"]
+
+
+def test_search_filing_text_can_restrict_to_one_section(monkeypatch):
+    filing_text = """# NVIDIA CORPORATION
+
+## Item 1. Business
+Actual business discussion.
+
+## Item 1A. Risk Factors
+Actual risk discussion that should be surfaced.
+More risk detail.
+
+## Item 1B. Unresolved Staff Comments
+None.
+"""
+    filing = SimpleNamespace(
+        accession_no="0001045810-26-000010",
+        form="10-K",
+        filing_date="2026-02-20",
+        markdown=lambda: filing_text,
+    )
+
+    class FakeCompany:
+        def __init__(self, ticker: str):
+            assert ticker == "NVDA"
+
+        def get_filings(self):
+            return [filing]
+
+    monkeypatch.setitem(sys.modules, "edgar", SimpleNamespace(Company=FakeCompany))
+
+    matches = analytics.search_filing_text(
+        "NVDA",
+        "0001045810-26-000010",
+        "Actual",
+        section_name="1A",
+        max_matches=5,
+    )
+
+    assert len(matches) == 1
+    assert matches[0]["item_code"] == "1A"
+    assert "risk discussion" in matches[0]["excerpt"]

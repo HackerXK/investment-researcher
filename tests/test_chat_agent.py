@@ -44,6 +44,7 @@ from investment_researcher.web.agent_tools import (
     list_filings,
     read_filing,
     read_filing_section,
+    search_filing_text,
     search_companies,
     summarize_insider_sells,
     summarize_institutional_holdings,
@@ -97,6 +98,7 @@ class TestAgentConstruction:
             "list_filings",
             "list_filing_sections",
             "read_filing_section",
+            "search_filing_text",
             "read_filing",
             "get_insider_trades",
             "summarize_insider_sells",
@@ -371,6 +373,16 @@ class TestToolSchemas:
         assert "section_name" in props
         assert "truncate" in props
         assert "max_chars" in props
+
+    def test_search_filing_text_schema(self):
+        tool = self._get_tool_by_name("search_filing_text")
+        props = tool.params_json_schema.get("properties", {})
+        assert "ticker" in props
+        assert "accession_number" in props
+        assert "query" in props
+        assert "section_name" in props
+        assert "max_matches" in props
+        assert "context_chars" in props
 
     def test_get_insider_trades_schema(self):
         tool = self._get_tool_by_name("get_insider_trades")

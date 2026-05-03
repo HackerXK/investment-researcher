@@ -307,6 +307,95 @@ def extract_filing_item_section(text: str, section_name: str) -> dict[str, Any] 
     return None
 
 
+def _build_filing_search_pattern(query: str) -> re.Pattern[str] | None:
+    """Build a whitespace-tolerant case-insensitive search pattern."""
+    tokens = [re.escape(token) for token in str(query).strip().split() if token]
+    if not tokens:
+        return None
+    return re.compile(r"\s+".join(tokens), re.IGNORECASE)
+
+
+def _excerpt_around_match(text: str, match: re.Match[str], context_chars: int) -> str:
+    """Return a bounded excerpt around a filing-text match."""
+    start = max(match.start() - context_chars, 0)
+    end = min(match.end() + context_chars, len(text))
+    excerpt = re.sub(r"\s+", " ", text[start:end]).strip()
+    if start > 0 and excerpt:
+        excerpt = "..." + excerpt
+    if end < len(text) and excerpt:
+        excerpt = excerpt + "..."
+    return excerpt
+
+
+def search_filing_text_matches(
+    text: str,
+    query: str,
+    section_name: str | None = None,
+    max_matches: int = 5,
+    context_chars: int = 280,
+) -> list[dict[str, Any]]:
+    """Search filing text and return compact evidence excerpts.
+
+    When item sections can be parsed, search runs over those parsed section bodies
+    instead of the raw filing so table-of-contents hits do not crowd out the real
+    section body.
+    """
+    pattern = _build_filing_search_pattern(query)
+    if not pattern or max_matches <= 0:
+        return []
+
+    parsed_sections = _parse_filing_item_sections(text)
+    search_sources: list[dict[str, Any]]
+    if section_name:
+        selector_key = _normalize_section_key(section_name)
+        if not selector_key:
+            return []
+        search_sources = [
+            section
+            for section in parsed_sections
+            if _section_selector_matches(section, selector_key)
+        ]
+    elif parsed_sections:
+        search_sources = parsed_sections
+    else:
+        search_sources = [
+            {
+                "item_code": None,
+                "heading": None,
+                "title": None,
+                "line_number": 1,
+                "content": text,
+            }
+        ]
+
+    results: list[dict[str, Any]] = []
+    context_chars = max(context_chars, 0)
+
+    for source in search_sources:
+        content = str(source.get("content") or "")
+        if not content:
+            continue
+        for match in pattern.finditer(content):
+            line_number = int(source.get("line_number") or 1) + content.count(
+                "\n", 0, match.start()
+            )
+            results.append(
+                {
+                    "query": str(query).strip(),
+                    "matched_text": re.sub(r"\s+", " ", match.group(0)).strip(),
+                    "excerpt": _excerpt_around_match(content, match, context_chars),
+                    "line_number": line_number,
+                    "item_code": source.get("item_code"),
+                    "heading": source.get("heading"),
+                    "title": source.get("title"),
+                }
+            )
+            if len(results) >= max_matches:
+                return results
+
+    return results
+
+
 def extract_form4_trades(
     filing: Any,
     transaction_codes: list[str] | None = None,

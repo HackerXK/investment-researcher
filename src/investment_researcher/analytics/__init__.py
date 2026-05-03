@@ -45,6 +45,7 @@ from investment_researcher.analytics.sec_filings import (
     extract_material_events,
     extract_proxy_statement_record,
     list_filing_item_sections,
+    search_filing_text_matches,
     summarize_insider_sales_rows,
     summarize_institutional_holdings_rows,
     summarize_material_event_rows,
@@ -86,6 +87,7 @@ __all__ = [
     "get_filing_text",
     "get_filing_sections",
     "get_filing_section",
+    "search_filing_text",
     "get_insider_trades",
     "summarize_insider_sells",
     "get_material_events",
@@ -332,6 +334,44 @@ def get_filing_section(
             exc_info=True,
         )
         return {}
+
+
+def search_filing_text(
+    ticker: str,
+    accession_number: str,
+    query: str,
+    section_name: str | None = None,
+    max_matches: int = 5,
+    context_chars: int = 280,
+) -> list[dict[str, Any]]:
+    """Search filing text and return compact evidence excerpts."""
+    try:
+        filing = _find_company_filing(ticker, accession_number)
+        if filing is None:
+            return []
+
+        filing_metadata = {
+            "accession_number": getattr(filing, "accession_no", None),
+            "form_type": getattr(filing, "form", None),
+            "filing_date": str(getattr(filing, "filing_date", "") or ""),
+        }
+        matches = search_filing_text_matches(
+            filing.markdown(),
+            query=query,
+            section_name=section_name,
+            max_matches=max_matches,
+            context_chars=context_chars,
+        )
+        return [{**filing_metadata, **match} for match in matches]
+    except Exception:
+        log.warning(
+            "Could not search filing text for %s / %s / %s",
+            ticker,
+            accession_number,
+            query,
+            exc_info=True,
+        )
+        return []
 
 
 def get_insider_trades(
