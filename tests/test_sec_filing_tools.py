@@ -823,3 +823,63 @@ None.
     assert len(matches) == 1
     assert matches[0]["item_code"] == "1A"
     assert "risk discussion" in matches[0]["excerpt"]
+
+
+def test_compare_filing_sections_returns_changed_excerpts(monkeypatch):
+    current_filing_text = """# NVIDIA CORPORATION
+
+## Item 1A. Risk Factors
+
+Shared baseline risk paragraph.
+
+Supply chain concentration and export controls may disrupt revenue.
+"""
+    previous_filing_text = """# NVIDIA CORPORATION
+
+## Item 1A. Risk Factors
+
+Shared baseline risk paragraph.
+
+Demand concentration may affect results.
+"""
+    filings = [
+        SimpleNamespace(
+            accession_no="0001045810-26-000010",
+            form="10-K",
+            filing_date="2026-02-20",
+            markdown=lambda: current_filing_text,
+        ),
+        SimpleNamespace(
+            accession_no="0001045810-25-000011",
+            form="10-K",
+            filing_date="2025-02-21",
+            markdown=lambda: previous_filing_text,
+        ),
+    ]
+
+    class FakeCompany:
+        def __init__(self, ticker: str):
+            assert ticker == "NVDA"
+
+        def get_filings(self):
+            return filings
+
+    monkeypatch.setitem(sys.modules, "edgar", SimpleNamespace(Company=FakeCompany))
+
+    comparison = analytics.compare_filing_sections(
+        ticker="NVDA",
+        current_accession_number="0001045810-26-000010",
+        previous_accession_number="0001045810-25-000011",
+        section_name="risk factors",
+        max_changes=3,
+    )
+
+    assert comparison["ticker"] == "NVDA"
+    assert comparison["item_code"] == "1A"
+    assert comparison["current_filing"]["accession_number"] == "0001045810-26-000010"
+    assert comparison["previous_filing"]["accession_number"] == "0001045810-25-000011"
+    assert comparison["similarity_ratio"] < 1
+    assert comparison["current_only_count"] == 1
+    assert comparison["previous_only_count"] == 1
+    assert "Supply chain concentration and export controls" in comparison["current_only_excerpts"][0]
+    assert "Demand concentration may affect results" in comparison["previous_only_excerpts"][0]

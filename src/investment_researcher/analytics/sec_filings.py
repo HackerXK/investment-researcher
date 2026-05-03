@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import date, datetime
 from decimal import Decimal
+from difflib import SequenceMatcher
 from numbers import Number
 import re
 from typing import Any, Iterable
@@ -394,6 +395,74 @@ def search_filing_text_matches(
                 return results
 
     return results
+
+
+def _normalize_diff_block(text: Any) -> str:
+    """Normalize a section block for stable comparison and display."""
+    return re.sub(r"\s+", " ", str(text or "")).strip()
+
+
+def _split_section_diff_blocks(text: str) -> list[str]:
+    """Split section content into coarse blocks for filing-to-filing comparison."""
+    blocks = [
+        _normalize_diff_block(block)
+        for block in re.split(r"\n\s*\n", text)
+    ]
+    return [block for block in blocks if block]
+
+
+def compare_filing_section_content(
+    current_section: dict[str, Any],
+    previous_section: dict[str, Any],
+    max_changes: int = 5,
+    excerpt_chars: int = 280,
+) -> dict[str, Any]:
+    """Compare two parsed filing sections and return compact change excerpts."""
+    current_content = str(current_section.get("content") or "")
+    previous_content = str(previous_section.get("content") or "")
+
+    current_blocks = _split_section_diff_blocks(current_content)
+    previous_blocks = _split_section_diff_blocks(previous_content)
+    matcher = SequenceMatcher(a=previous_blocks, b=current_blocks, autojunk=False)
+
+    current_only_blocks: list[str] = []
+    previous_only_blocks: list[str] = []
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag in {"replace", "delete"}:
+            previous_only_blocks.extend(previous_blocks[i1:i2])
+        if tag in {"replace", "insert"}:
+            current_only_blocks.extend(current_blocks[j1:j2])
+
+    current_only_excerpts = [
+        excerpt
+        for excerpt in (
+            text_excerpt(block, excerpt_chars) for block in current_only_blocks[:max_changes]
+        )
+        if excerpt
+    ]
+    previous_only_excerpts = [
+        excerpt
+        for excerpt in (
+            text_excerpt(block, excerpt_chars) for block in previous_only_blocks[:max_changes]
+        )
+        if excerpt
+    ]
+
+    return {
+        "section_name": current_section.get("heading") or previous_section.get("heading"),
+        "item_code": current_section.get("item_code") or previous_section.get("item_code"),
+        "heading": current_section.get("heading") or previous_section.get("heading"),
+        "title": current_section.get("title") or previous_section.get("title"),
+        "current_line_number": current_section.get("line_number"),
+        "previous_line_number": previous_section.get("line_number"),
+        "current_text_length": current_section.get("text_length"),
+        "previous_text_length": previous_section.get("text_length"),
+        "similarity_ratio": normalize_number(round(matcher.ratio(), 6)),
+        "current_only_count": len(current_only_blocks),
+        "previous_only_count": len(previous_only_blocks),
+        "current_only_excerpts": current_only_excerpts,
+        "previous_only_excerpts": previous_only_excerpts,
+    }
 
 
 def extract_form4_trades(

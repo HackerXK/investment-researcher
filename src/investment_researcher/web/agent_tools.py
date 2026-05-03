@@ -17,6 +17,7 @@ from agents import function_tool
 
 from investment_researcher.analytics import (
     cashflow_pivot,
+    compare_filing_sections as _compare_filing_sections,
     get_all_tickers,
     get_company_profile as _get_company_profile,
     get_filing_section as _get_filing_section,
@@ -555,6 +556,49 @@ def search_filing_text(
 
 
 @function_tool
+def compare_filing_sections(
+    ticker: str,
+    current_accession_number: str,
+    previous_accession_number: str,
+    section_name: str,
+    max_changes: int = 5,
+    excerpt_chars: int = 280,
+) -> str:
+    """Compare the same section across two SEC filings as structured JSON.
+
+    Prefer this when the question asks how a risk factor, MD&A section, or
+    other item changed between filings.
+
+    Args:
+        ticker: Stock ticker symbol.
+        current_accession_number: The newer filing accession number.
+        previous_accession_number: The older filing accession number.
+        section_name: Item code or section title, e.g. "1A", "risk factors", "7".
+        max_changes: Maximum changed excerpts to return from each filing.
+        excerpt_chars: Maximum characters per changed excerpt.
+    """
+    result = _compare_filing_sections(
+        ticker=ticker,
+        current_accession_number=current_accession_number,
+        previous_accession_number=previous_accession_number,
+        section_name=section_name,
+        max_changes=max_changes,
+        excerpt_chars=excerpt_chars,
+    )
+    if not result:
+        return _dict_to_json(
+            {
+                "error": "Filing section comparison could not be produced.",
+                "ticker": ticker,
+                "current_accession_number": current_accession_number,
+                "previous_accession_number": previous_accession_number,
+                "section_name": section_name,
+            }
+        )
+    return _dict_to_json(result)
+
+
+@function_tool
 def get_insider_trades(
     ticker: str,
     start_date: str,
@@ -874,6 +918,7 @@ ALL_TOOLS = [
     list_filing_sections,
     read_filing_section,
     search_filing_text,
+    compare_filing_sections,
     read_filing,
     get_insider_trades,
     summarize_insider_sells,

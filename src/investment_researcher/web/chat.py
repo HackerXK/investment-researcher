@@ -117,6 +117,8 @@ call multiple tools if the question spans several companies or data types.
         list_filing_sections and read_filing_section before reading the full filing.
 - For targeted phrase or theme lookups inside a filing, prefer
     search_filing_text before reading the full filing.
+- For "how did this filing section change?" questions, prefer
+    compare_filing_sections before reading both sections manually.
 - Use read_filing only when you genuinely need the broader filing context.
 - For insider trading / Form 4 questions, prefer get_insider_trades with an
     explicit date range instead of relying on only the most recent list_filings
@@ -205,6 +207,7 @@ _TOOL_PROGRESS_MESSAGES = {
     "list_filing_sections": "mapping filing sections",
     "read_filing_section": "reading filing sections",
     "search_filing_text": "searching filing text",
+    "compare_filing_sections": "comparing filing sections",
     "read_filing": "reading SEC filings",
     "get_insider_trades": "analyzing insider trades",
     "summarize_insider_sells": "summarizing insider sales",

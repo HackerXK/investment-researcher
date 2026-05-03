@@ -39,6 +39,7 @@ from investment_researcher.ratios import (
 )
 from investment_researcher.analytics.sec_filings import (
     build_filing_date_filter as _build_filing_date_filter_impl,
+    compare_filing_section_content,
     extract_filing_item_section,
     extract_form4_trades,
     extract_institutional_holdings,
@@ -88,6 +89,7 @@ __all__ = [
     "get_filing_sections",
     "get_filing_section",
     "search_filing_text",
+    "compare_filing_sections",
     "get_insider_trades",
     "summarize_insider_sells",
     "get_material_events",
@@ -372,6 +374,59 @@ def search_filing_text(
             exc_info=True,
         )
         return []
+
+
+def compare_filing_sections(
+    ticker: str,
+    current_accession_number: str,
+    previous_accession_number: str,
+    section_name: str,
+    max_changes: int = 5,
+    excerpt_chars: int = 280,
+) -> dict[str, Any]:
+    """Compare the same filing section across two filings."""
+    try:
+        current_filing = _find_company_filing(ticker, current_accession_number)
+        previous_filing = _find_company_filing(ticker, previous_accession_number)
+        if current_filing is None or previous_filing is None:
+            return {}
+
+        current_section = extract_filing_item_section(current_filing.markdown(), section_name)
+        previous_section = extract_filing_item_section(previous_filing.markdown(), section_name)
+        if not current_section or not previous_section:
+            return {}
+
+        comparison = compare_filing_section_content(
+            current_section,
+            previous_section,
+            max_changes=max_changes,
+            excerpt_chars=excerpt_chars,
+        )
+        return {
+            "ticker": ticker.upper(),
+            "requested_section": section_name,
+            "current_filing": {
+                "accession_number": getattr(current_filing, "accession_no", None),
+                "form_type": getattr(current_filing, "form", None),
+                "filing_date": str(getattr(current_filing, "filing_date", "") or ""),
+            },
+            "previous_filing": {
+                "accession_number": getattr(previous_filing, "accession_no", None),
+                "form_type": getattr(previous_filing, "form", None),
+                "filing_date": str(getattr(previous_filing, "filing_date", "") or ""),
+            },
+            **comparison,
+        }
+    except Exception:
+        log.warning(
+            "Could not compare filing sections for %s / %s / %s / %s",
+            ticker,
+            current_accession_number,
+            previous_accession_number,
+            section_name,
+            exc_info=True,
+        )
+        return {}
 
 
 def get_insider_trades(

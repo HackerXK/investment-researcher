@@ -22,6 +22,7 @@ from httpx import ASGITransport, AsyncClient
 from investment_researcher.web.agent_tools import (
     ALL_TOOLS,
     compare_metric_across_companies,
+    compare_filing_sections,
     get_cashflow_pivot,
     get_company_profile,
     get_institutional_holdings,
@@ -99,6 +100,7 @@ class TestAgentConstruction:
             "list_filing_sections",
             "read_filing_section",
             "search_filing_text",
+            "compare_filing_sections",
             "read_filing",
             "get_insider_trades",
             "summarize_insider_sells",
@@ -383,6 +385,16 @@ class TestToolSchemas:
         assert "section_name" in props
         assert "max_matches" in props
         assert "context_chars" in props
+
+    def test_compare_filing_sections_schema(self):
+        tool = self._get_tool_by_name("compare_filing_sections")
+        props = tool.params_json_schema.get("properties", {})
+        assert "ticker" in props
+        assert "current_accession_number" in props
+        assert "previous_accession_number" in props
+        assert "section_name" in props
+        assert "max_changes" in props
+        assert "excerpt_chars" in props
 
     def test_get_insider_trades_schema(self):
         tool = self._get_tool_by_name("get_insider_trades")
