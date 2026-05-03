@@ -25,7 +25,7 @@ Four main workflows:
 **Agentic chat** — an AI financial analyst that can autonomously plan and execute multi-step analyses:
 
 - Built with the [OpenAI Agents SDK](https://github.com/openai/openai-agents-python) using `OpenAIChatCompletionsModel` for compatibility with local vLLM / any OpenAI-compatible endpoint.
-- The agent has 30 tools wrapping the analytics and SEC research surface: company discovery, time-series analytics, ratios, cross-company comparison, filing discovery, section-aware filing reading, targeted filing search, filing-to-filing section comparison, and structured Form 4, 8-K, DEF 14A, and 13F analysis.
+- The agent has 32 tools wrapping the analytics and SEC research surface: company discovery, time-series analytics, ratios, cross-company comparison, filing discovery, section-aware filing reading, targeted filing search, filing-to-filing section comparison, structured beneficial ownership analysis for Schedule 13D and 13G, and structured Form 4, 8-K, DEF 14A, and 13F analysis.
 - Streams responses via SSE (`data: {"token": "..."}` / `data: [DONE]`) to the Nuxt 3 frontend chat panel.
 - Tracing is disabled by default (no OpenAI platform key needed).
 
@@ -281,7 +281,7 @@ The chat backend uses the [OpenAI Agents SDK](https://github.com/openai/openai-a
 ### How it works
 
 1. The user sends a question via the Nuxt 3 frontend chat panel (or the `/api/chat` REST endpoint).
-2. The backend constructs an `Agent` with 30 tools wrapping the full analytics surface.
+2. The backend constructs an `Agent` with 32 tools wrapping the full analytics surface.
 3. `Runner.run_streamed()` lets the agent plan tool calls, execute them, and stream the final response token-by-token via SSE.
 4. The frontend renders tokens incrementally — same SSE format as before (`data: {"token": "..."}` / `data: [DONE]`).
 
@@ -309,8 +309,10 @@ The chat backend uses the [OpenAI Agents SDK](https://github.com/openai/openai-a
 | `list_filing_sections` | List item-based sections inside a filing so the agent can target Item 1A, Item 7, Item 5.02, and similar sections directly |
 | `read_filing_section` | Read one item-based filing section with accession and section metadata instead of loading the whole filing |
 | `search_filing_text` | Search a filing or one section for a phrase and return compact evidence excerpts with section metadata |
-| `compare_filing_sections` | Compare the same section across two filings and return current-only and previous-only evidence excerpts plus a similarity score |
+| `compare_filing_sections` | Compare the same section across two filings and return current-only and previous-only evidence excerpts plus a similarity score; if no prior accession is supplied, it picks the latest earlier filing with the same base form |
 | `read_filing` | Read full text of any SEC filing by accession number |
+| `get_beneficial_ownership` | Structured Schedule 13D and 13G filings with ownership percentages, share counts, filer identities, and key narrative fields |
+| `summarize_beneficial_ownership` | Compact summary of recent Schedule 13D and 13G activity for a company |
 | `get_insider_trades` | Structured Form 4 transactions across a date range, including insider, tx date, code, shares, proceeds, and significance bucket |
 | `summarize_insider_sells` | Grouped Form 4 sell summaries by insider or transaction code |
 | `get_material_events` | Structured 8-K event rows with item codes and excerpts |

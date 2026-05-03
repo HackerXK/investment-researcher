@@ -40,6 +40,7 @@ from investment_researcher.ratios import (
 from investment_researcher.analytics.sec_filings import (
     build_filing_date_filter as _build_filing_date_filter_impl,
     compare_filing_section_content,
+    extract_beneficial_ownership_report,
     extract_filing_item_section,
     extract_form4_trades,
     extract_institutional_holdings,
@@ -47,6 +48,7 @@ from investment_researcher.analytics.sec_filings import (
     extract_proxy_statement_record,
     list_filing_item_sections,
     search_filing_text_matches,
+    summarize_beneficial_ownership_rows,
     summarize_insider_sales_rows,
     summarize_institutional_holdings_rows,
     summarize_material_event_rows,
@@ -90,6 +92,8 @@ __all__ = [
     "get_filing_section",
     "search_filing_text",
     "compare_filing_sections",
+    "get_beneficial_ownership",
+    "summarize_beneficial_ownership",
     "get_insider_trades",
     "summarize_insider_sells",
     "get_material_events",
@@ -261,6 +265,54 @@ def _find_company_filing(ticker: str, accession_number: str) -> Any | None:
     return None
 
 
+def _normalize_beneficial_ownership_form(form_type: str | None) -> str | None:
+    """Normalize beneficial ownership form filters to SC 13D or SC 13G."""
+    if form_type is None:
+        return None
+    normalized = " ".join(str(form_type).upper().split())
+    if "13D" in normalized:
+        return "SC 13D"
+    if "13G" in normalized:
+        return "SC 13G"
+    return None
+
+
+def _normalize_base_form_type(form_type: str | None) -> str | None:
+    """Normalize a filing form to its base type, ignoring amendment suffixes."""
+    if form_type is None:
+        return None
+    normalized = " ".join(str(form_type).upper().split())
+    if not normalized:
+        return None
+    return normalized.split("/A", 1)[0].strip() or None
+
+
+def _find_latest_prior_comparable_filing(ticker: str, current_filing: Any) -> Any | None:
+    """Pick the latest earlier filing for the same issuer and base form type."""
+    from edgar import Company as EdgarCompany
+
+    current_accession = getattr(current_filing, "accession_no", None)
+    current_base_form = _normalize_base_form_type(getattr(current_filing, "form", None))
+    current_key = _filing_sort_key(current_filing)
+    if current_base_form is None:
+        return None
+
+    company = EdgarCompany(ticker.upper())
+    candidate_filings = []
+    for filing in _collect_filings(company.get_filings()):
+        if getattr(filing, "accession_no", None) == current_accession:
+            continue
+        if _normalize_base_form_type(getattr(filing, "form", None)) != current_base_form:
+            continue
+        if _filing_sort_key(filing) >= current_key:
+            continue
+        candidate_filings.append(filing)
+
+    if not candidate_filings:
+        return None
+    return max(candidate_filings, key=_filing_sort_key)
+
+
 def get_filing_text(ticker: str, accession_number: str) -> str:
     """Return a filing's full text as markdown.
 
@@ -379,16 +431,25 @@ def search_filing_text(
 def compare_filing_sections(
     ticker: str,
     current_accession_number: str,
-    previous_accession_number: str,
     section_name: str,
+    previous_accession_number: str | None = None,
     max_changes: int = 5,
     excerpt_chars: int = 280,
 ) -> dict[str, Any]:
     """Compare the same filing section across two filings."""
     try:
         current_filing = _find_company_filing(ticker, current_accession_number)
-        previous_filing = _find_company_filing(ticker, previous_accession_number)
-        if current_filing is None or previous_filing is None:
+        if current_filing is None:
+            return {}
+
+        previous_selection_mode = "explicit_previous_accession"
+        if previous_accession_number:
+            previous_filing = _find_company_filing(ticker, previous_accession_number)
+        else:
+            previous_filing = _find_latest_prior_comparable_filing(ticker, current_filing)
+            previous_selection_mode = "latest_prior_same_form"
+
+        if previous_filing is None:
             return {}
 
         current_section = extract_filing_item_section(current_filing.markdown(), section_name)
@@ -405,6 +466,7 @@ def compare_filing_sections(
         return {
             "ticker": ticker.upper(),
             "requested_section": section_name,
+            "previous_selection_mode": previous_selection_mode,
             "current_filing": {
                 "accession_number": getattr(current_filing, "accession_no", None),
                 "form_type": getattr(current_filing, "form", None),
@@ -427,6 +489,81 @@ def compare_filing_sections(
             exc_info=True,
         )
         return {}
+
+
+def get_beneficial_ownership(
+    ticker: str,
+    form_type: str | None = None,
+    limit: int = 10,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    include_amendments: bool = True,
+    summary_chars: int = 2_000,
+) -> list[dict[str, Any]]:
+    """Return structured Schedule 13D/G beneficial ownership filings."""
+    try:
+        from edgar import Company as EdgarCompany
+
+        normalized_form = _normalize_beneficial_ownership_form(form_type)
+        company = EdgarCompany(ticker.upper())
+        filings = company.get_filings(
+            filing_date=_build_filing_date_filter(start_date, end_date),
+            amendments=include_amendments,
+        )
+        if filings is None:
+            return []
+
+        rows: list[dict[str, Any]] = []
+        for filing in sorted(_collect_filings(filings), key=_filing_sort_key, reverse=True):
+            filing_form = _normalize_beneficial_ownership_form(getattr(filing, "form", None))
+            if filing_form is None:
+                continue
+            if normalized_form and filing_form != normalized_form:
+                continue
+            try:
+                row = extract_beneficial_ownership_report(filing, summary_chars=summary_chars)
+                if row:
+                    rows.append(row)
+                    if len(rows) >= limit:
+                        break
+            except Exception:
+                log.warning(
+                    "Could not parse beneficial ownership filing for %s / %s",
+                    ticker,
+                    getattr(filing, "accession_no", None),
+                    exc_info=True,
+                )
+
+        return rows
+    except Exception:
+        log.warning(
+            "Could not retrieve beneficial ownership filings for %s",
+            ticker,
+            exc_info=True,
+        )
+        return []
+
+
+def summarize_beneficial_ownership(
+    ticker: str,
+    form_type: str | None = None,
+    limit: int = 10,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    include_amendments: bool = True,
+    summary_chars: int = 2_000,
+) -> dict[str, Any]:
+    """Return a compact summary of Schedule 13D/G beneficial ownership filings."""
+    rows = get_beneficial_ownership(
+        ticker=ticker,
+        form_type=form_type,
+        limit=limit,
+        start_date=start_date,
+        end_date=end_date,
+        include_amendments=include_amendments,
+        summary_chars=summary_chars,
+    )
+    return summarize_beneficial_ownership_rows(rows, limit=limit)
 
 
 def get_insider_trades(

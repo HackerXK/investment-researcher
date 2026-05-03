@@ -23,6 +23,7 @@ from investment_researcher.web.agent_tools import (
     ALL_TOOLS,
     compare_metric_across_companies,
     compare_filing_sections,
+    get_beneficial_ownership,
     get_cashflow_pivot,
     get_company_profile,
     get_institutional_holdings,
@@ -47,6 +48,7 @@ from investment_researcher.web.agent_tools import (
     read_filing_section,
     search_filing_text,
     search_companies,
+    summarize_beneficial_ownership,
     summarize_insider_sells,
     summarize_institutional_holdings,
     summarize_material_events,
@@ -102,6 +104,8 @@ class TestAgentConstruction:
             "search_filing_text",
             "compare_filing_sections",
             "read_filing",
+            "get_beneficial_ownership",
+            "summarize_beneficial_ownership",
             "get_insider_trades",
             "summarize_insider_sells",
             "get_material_events",
@@ -395,6 +399,33 @@ class TestToolSchemas:
         assert "section_name" in props
         assert "max_changes" in props
         assert "excerpt_chars" in props
+        previous_accession_schema = props["previous_accession_number"]
+        assert any(
+            variant.get("type") == "null"
+            for variant in previous_accession_schema.get("anyOf", [])
+        )
+
+    def test_get_beneficial_ownership_schema(self):
+        tool = self._get_tool_by_name("get_beneficial_ownership")
+        props = tool.params_json_schema.get("properties", {})
+        assert "ticker" in props
+        assert "form_type" in props
+        assert "limit" in props
+        assert "start_date" in props
+        assert "end_date" in props
+        assert "include_amendments" in props
+        assert "summary_chars" in props
+
+    def test_summarize_beneficial_ownership_schema(self):
+        tool = self._get_tool_by_name("summarize_beneficial_ownership")
+        props = tool.params_json_schema.get("properties", {})
+        assert "ticker" in props
+        assert "form_type" in props
+        assert "limit" in props
+        assert "start_date" in props
+        assert "end_date" in props
+        assert "include_amendments" in props
+        assert "summary_chars" in props
 
     def test_get_insider_trades_schema(self):
         tool = self._get_tool_by_name("get_insider_trades")

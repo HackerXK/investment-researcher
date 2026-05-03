@@ -465,6 +465,176 @@ def compare_filing_section_content(
     }
 
 
+def _normalize_address(value: Any) -> str | None:
+    """Normalize an address-like object to a compact display string."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value.strip() or None
+
+    parts = [
+        getattr(value, "street1", None),
+        getattr(value, "street2", None),
+        getattr(value, "city", None),
+        getattr(value, "state_or_country", None),
+        getattr(value, "zipcode", None),
+    ]
+    normalized_parts = []
+    for part in parts:
+        if part is None:
+            continue
+        text = str(part).strip()
+        if text:
+            normalized_parts.append(text)
+    normalized = ", ".join(normalized_parts)
+    return normalized or None
+
+
+def _serialize_reporting_person(person: Any) -> dict[str, Any]:
+    """Convert one Schedule 13D/G reporting person to JSON-safe fields."""
+    sole_voting = normalize_number(getattr(person, "sole_voting_power", None)) or 0
+    shared_voting = normalize_number(getattr(person, "shared_voting_power", None)) or 0
+    sole_dispositive = normalize_number(getattr(person, "sole_dispositive_power", None)) or 0
+    shared_dispositive = normalize_number(getattr(person, "shared_dispositive_power", None)) or 0
+    return {
+        "cik": getattr(person, "cik", None) or None,
+        "name": getattr(person, "name", None),
+        "citizenship": getattr(person, "citizenship", None),
+        "type_of_reporting_person": getattr(person, "type_of_reporting_person", None),
+        "fund_type": getattr(person, "fund_type", None),
+        "comment": getattr(person, "comment", None),
+        "member_of_group": getattr(person, "member_of_group", None),
+        "aggregate_amount": normalize_number(getattr(person, "aggregate_amount", None)),
+        "percent_of_class": normalize_number(getattr(person, "percent_of_class", None)),
+        "sole_voting_power": sole_voting,
+        "shared_voting_power": shared_voting,
+        "total_voting_power": normalize_number(sole_voting + shared_voting),
+        "sole_dispositive_power": sole_dispositive,
+        "shared_dispositive_power": shared_dispositive,
+        "total_dispositive_power": normalize_number(sole_dispositive + shared_dispositive),
+        "is_aggregate_exclude_shares": bool(getattr(person, "is_aggregate_exclude_shares", False)),
+        "no_cik": bool(getattr(person, "no_cik", False)),
+    }
+
+
+def extract_beneficial_ownership_report(
+    filing: Any,
+    summary_chars: int = _DEFAULT_EVENT_SUMMARY_CHARS,
+) -> dict[str, Any] | None:
+    """Extract a structured Schedule 13D/G report from a filing."""
+    schedule = filing.obj()
+    if schedule is None:
+        return None
+
+    issuer_info = getattr(schedule, "issuer_info", None)
+    security_info = getattr(schedule, "security_info", None)
+    items = getattr(schedule, "items", None)
+    reporting_persons = [
+        _serialize_reporting_person(person)
+        for person in list(getattr(schedule, "reporting_persons", []) or [])
+    ]
+
+    return {
+        "accession_number": getattr(filing, "accession_no", None),
+        "form_type": getattr(filing, "form", None),
+        "filing_date": str(getattr(filing, "filing_date", "") or ""),
+        "issuer_name": getattr(issuer_info, "name", None),
+        "issuer_cik": getattr(issuer_info, "cik", None) or None,
+        "issuer_cusip": getattr(issuer_info, "cusip", None) or getattr(security_info, "cusip", None),
+        "issuer_address": _normalize_address(getattr(issuer_info, "address", None)),
+        "security_title": getattr(security_info, "title", None),
+        "event_date": normalize_scalar(
+            getattr(schedule, "date_of_event", None) or getattr(schedule, "event_date", None)
+        ),
+        "is_amendment": bool(getattr(schedule, "is_amendment", False)),
+        "amendment_number": normalize_number(getattr(schedule, "amendment_number", None)),
+        "previously_filed": bool(getattr(schedule, "previously_filed", False)),
+        "rule_designation": getattr(schedule, "rule_designation", None),
+        "is_passive_investor": bool(getattr(schedule, "is_passive_investor", False)),
+        "total_shares": normalize_number(getattr(schedule, "total_shares", None)),
+        "total_percent": normalize_number(getattr(schedule, "total_percent", None)),
+        "reporting_person_count": len(reporting_persons),
+        "reporting_person_names": unique_nonempty(
+            person.get("name") for person in reporting_persons
+        ),
+        "reporting_persons": reporting_persons,
+        "purpose_of_transaction": text_excerpt(
+            getattr(items, "item4_purpose_of_transaction", None),
+            summary_chars,
+        ),
+        "source_of_funds": text_excerpt(
+            getattr(items, "item3_source_of_funds", None),
+            summary_chars,
+        ),
+        "ownership_transactions": text_excerpt(
+            getattr(items, "item5_transactions", None),
+            summary_chars,
+        ),
+        "certification": text_excerpt(
+            getattr(items, "item10_certification", None),
+            summary_chars,
+        ),
+    }
+
+
+def summarize_beneficial_ownership_rows(
+    rows: list[dict[str, Any]],
+    limit: int = 10,
+) -> dict[str, Any]:
+    """Summarize structured Schedule 13D/G rows for agent consumption."""
+    if not rows:
+        return {}
+
+    sorted_rows = sorted(
+        rows,
+        key=lambda row: (
+            str(row.get("filing_date") or ""),
+            str(row.get("accession_number") or ""),
+        ),
+        reverse=True,
+    )
+    latest = sorted_rows[0]
+    history = [
+        {
+            "accession_number": row.get("accession_number"),
+            "form_type": row.get("form_type"),
+            "filing_date": row.get("filing_date"),
+            "event_date": row.get("event_date"),
+            "total_shares": row.get("total_shares"),
+            "total_percent": row.get("total_percent"),
+            "is_amendment": row.get("is_amendment"),
+            "amendment_number": row.get("amendment_number"),
+            "rule_designation": row.get("rule_designation"),
+            "is_passive_investor": row.get("is_passive_investor"),
+            "reporting_person_names": row.get("reporting_person_names"),
+        }
+        for row in sorted_rows[:limit]
+    ]
+
+    return {
+        "issuer_name": latest.get("issuer_name"),
+        "issuer_cik": latest.get("issuer_cik"),
+        "issuer_cusip": latest.get("issuer_cusip"),
+        "security_title": latest.get("security_title"),
+        "filings_count": len(rows),
+        "latest_accession_number": latest.get("accession_number"),
+        "latest_form_type": latest.get("form_type"),
+        "latest_filing_date": latest.get("filing_date"),
+        "latest_event_date": latest.get("event_date"),
+        "latest_total_shares": latest.get("total_shares"),
+        "latest_total_percent": latest.get("total_percent"),
+        "latest_reporting_person_names": latest.get("reporting_person_names"),
+        "latest_reporting_persons": latest.get("reporting_persons"),
+        "latest_purpose_of_transaction": latest.get("purpose_of_transaction"),
+        "latest_source_of_funds": latest.get("source_of_funds"),
+        "latest_certification": latest.get("certification"),
+        "latest_rule_designation": latest.get("rule_designation"),
+        "latest_is_passive_investor": latest.get("is_passive_investor"),
+        "history": history,
+        "form_types_present": unique_nonempty(row.get("form_type") for row in sorted_rows),
+    }
+
+
 def extract_form4_trades(
     filing: Any,
     transaction_codes: list[str] | None = None,

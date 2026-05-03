@@ -19,6 +19,7 @@ from investment_researcher.analytics import (
     cashflow_pivot,
     compare_filing_sections as _compare_filing_sections,
     get_all_tickers,
+    get_beneficial_ownership as _get_beneficial_ownership,
     get_company_profile as _get_company_profile,
     get_filing_section as _get_filing_section,
     get_filing_sections as _get_filing_sections,
@@ -40,6 +41,7 @@ from investment_researcher.analytics import (
     quarterly_detail,
     ratio_timeseries,
     search_companies as _search_companies,
+    summarize_beneficial_ownership as _summarize_beneficial_ownership,
     summarize_institutional_holdings as _summarize_institutional_holdings,
     summarize_insider_sells as _summarize_insider_sells,
     summarize_material_events as _summarize_material_events,
@@ -559,21 +561,22 @@ def search_filing_text(
 def compare_filing_sections(
     ticker: str,
     current_accession_number: str,
-    previous_accession_number: str,
     section_name: str,
+    previous_accession_number: str | None = None,
     max_changes: int = 5,
     excerpt_chars: int = 280,
 ) -> str:
     """Compare the same section across two SEC filings as structured JSON.
 
     Prefer this when the question asks how a risk factor, MD&A section, or
-    other item changed between filings.
+    other item changed between filings. If previous_accession_number is omitted,
+    the latest earlier filing with the same base form type is selected automatically.
 
     Args:
         ticker: Stock ticker symbol.
         current_accession_number: The newer filing accession number.
-        previous_accession_number: The older filing accession number.
         section_name: Item code or section title, e.g. "1A", "risk factors", "7".
+        previous_accession_number: Optional older filing accession number.
         max_changes: Maximum changed excerpts to return from each filing.
         excerpt_chars: Maximum characters per changed excerpt.
     """
@@ -599,6 +602,76 @@ def compare_filing_sections(
 
 
 @function_tool
+def get_beneficial_ownership(
+    ticker: str,
+    form_type: str | None = None,
+    limit: int = 10,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    include_amendments: bool = True,
+    summary_chars: int = 2_000,
+) -> str:
+    """Return structured Schedule 13D and 13G filings for a company.
+
+    This is the preferred tool for beneficial-ownership questions because it
+    returns ownership percentages, share counts, reporting persons, and the
+    most relevant narrative fields directly from structured XML when available.
+
+    Args:
+        ticker: Stock ticker symbol for the issuer.
+        form_type: Optional filter such as "SC 13D" or "SC 13G".
+        limit: Maximum number of filings to return.
+        start_date: Optional earliest filing date (YYYY-MM-DD).
+        end_date: Optional latest filing date (YYYY-MM-DD).
+        include_amendments: Whether to include amended forms like SC 13D/A.
+        summary_chars: Maximum characters for narrative excerpts such as purpose of transaction.
+    """
+    results = _get_beneficial_ownership(
+        ticker=ticker,
+        form_type=form_type,
+        limit=limit,
+        start_date=start_date,
+        end_date=end_date,
+        include_amendments=include_amendments,
+        summary_chars=summary_chars,
+    )
+    return json.dumps(results, default=str)
+
+
+@function_tool
+def summarize_beneficial_ownership(
+    ticker: str,
+    form_type: str | None = None,
+    limit: int = 10,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    include_amendments: bool = True,
+    summary_chars: int = 2_000,
+) -> str:
+    """Return a compact summary of Schedule 13D and 13G filings.
+
+    Args:
+        ticker: Stock ticker symbol for the issuer.
+        form_type: Optional filter such as "SC 13D" or "SC 13G".
+        limit: Maximum number of filings to consider.
+        start_date: Optional earliest filing date (YYYY-MM-DD).
+        end_date: Optional latest filing date (YYYY-MM-DD).
+        include_amendments: Whether to include amended forms like SC 13D/A.
+        summary_chars: Maximum characters for narrative excerpts.
+    """
+    result = _summarize_beneficial_ownership(
+        ticker=ticker,
+        form_type=form_type,
+        limit=limit,
+        start_date=start_date,
+        end_date=end_date,
+        include_amendments=include_amendments,
+        summary_chars=summary_chars,
+    )
+    return json.dumps(result, default=str)
+
+
+@function_tool
 def get_insider_trades(
     ticker: str,
     start_date: str,
@@ -611,12 +684,11 @@ def get_insider_trades(
 ) -> str:
     """Return structured Form 4 insider transactions for a date range.
 
-    This is the preferred tool for insider-trading questions because it returns
+    This is best for insider selling or buying questions because it returns
     structured rows with accession number, insider, transaction date, code,
     shares, price, proceeds/value, and a Normal/Notable/Very notable bucket.
 
     Examples:
-    - Use transaction_codes=["S", "F"] to capture discretionary sales plus tax withholding.
     - Use transaction_codes=["S"] to isolate discretionary open-market sales.
     - Use acquired_disposed="A" for acquisitions instead of dispositions.
 
@@ -920,6 +992,8 @@ ALL_TOOLS = [
     search_filing_text,
     compare_filing_sections,
     read_filing,
+    get_beneficial_ownership,
+    summarize_beneficial_ownership,
     get_insider_trades,
     summarize_insider_sells,
     get_material_events,

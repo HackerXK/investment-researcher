@@ -118,7 +118,9 @@ call multiple tools if the question spans several companies or data types.
 - For targeted phrase or theme lookups inside a filing, prefer
     search_filing_text before reading the full filing.
 - For "how did this filing section change?" questions, prefer
-    compare_filing_sections before reading both sections manually.
+    compare_filing_sections before reading both sections manually. If the user
+    does not name the older filing, the tool can infer the latest earlier
+    same-form filing automatically.
 - Use read_filing only when you genuinely need the broader filing context.
 - For insider trading / Form 4 questions, prefer get_insider_trades with an
     explicit date range instead of relying on only the most recent list_filings
@@ -130,6 +132,8 @@ call multiple tools if the question spans several companies or data types.
     summarize_proxy_statement before reading raw proxy text.
 - For 13F institutional holding questions, prefer get_institutional_holdings or
     summarize_institutional_holdings.
+- For beneficial ownership questions about 5%+ stakes or activist/passive
+    positions, prefer get_beneficial_ownership or summarize_beneficial_ownership.
 - For wide-format tools like get_quarterly_detail and get_cashflow_pivot,
     read the returned rows literally: each row is labelled and recent periods
     appear first. Use only the labelled fields that are actually present.
@@ -209,6 +213,8 @@ _TOOL_PROGRESS_MESSAGES = {
     "search_filing_text": "searching filing text",
     "compare_filing_sections": "comparing filing sections",
     "read_filing": "reading SEC filings",
+    "get_beneficial_ownership": "analyzing beneficial ownership filings",
+    "summarize_beneficial_ownership": "summarizing beneficial ownership filings",
     "get_insider_trades": "analyzing insider trades",
     "summarize_insider_sells": "summarizing insider sales",
     "get_material_events": "analyzing 8-K events",
