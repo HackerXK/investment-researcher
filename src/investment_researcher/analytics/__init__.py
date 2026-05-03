@@ -39,10 +39,12 @@ from investment_researcher.ratios import (
 )
 from investment_researcher.analytics.sec_filings import (
     build_filing_date_filter as _build_filing_date_filter_impl,
+    extract_filing_item_section,
     extract_form4_trades,
     extract_institutional_holdings,
     extract_material_events,
     extract_proxy_statement_record,
+    list_filing_item_sections,
     summarize_insider_sales_rows,
     summarize_institutional_holdings_rows,
     summarize_material_event_rows,
@@ -82,6 +84,8 @@ __all__ = [
     # Filing access
     "get_filings_list",
     "get_filing_text",
+    "get_filing_sections",
+    "get_filing_section",
     "get_insider_trades",
     "summarize_insider_sells",
     "get_material_events",
@@ -236,6 +240,23 @@ def _build_filing_date_filter(
     return _build_filing_date_filter_impl(start_date, end_date)
 
 
+def _find_company_filing(ticker: str, accession_number: str) -> Any | None:
+    """Look up one filing by accession number for a company."""
+    from edgar import Company as EdgarCompany
+
+    company = EdgarCompany(ticker.upper())
+    filings = company.get_filings()
+    if filings is None:
+        return None
+
+    normalized_accession = accession_number.replace("-", "")
+    for filing in filings:
+        current_accession = getattr(filing, "accession_no", None)
+        if current_accession and current_accession.replace("-", "") == normalized_accession:
+            return filing
+    return None
+
+
 def get_filing_text(ticker: str, accession_number: str) -> str:
     """Return a filing's full text as markdown.
 
@@ -243,14 +264,9 @@ def get_filing_text(ticker: str, accession_number: str) -> str:
     filing into clean markdown — ideal for LLM context.
     """
     try:
-        from edgar import Company as EdgarCompany, find
-
-        co = EdgarCompany(ticker.upper())
-        filings = co.get_filings()
-        for f in filings:
-            acc = getattr(f, "accession_no", None)
-            if acc and acc.replace("-", "") == accession_number.replace("-", ""):
-                return f.markdown()
+        filing = _find_company_filing(ticker, accession_number)
+        if filing is not None:
+            return filing.markdown()
         return ""
     except Exception:
         log.warning(
@@ -260,6 +276,62 @@ def get_filing_text(ticker: str, accession_number: str) -> str:
             exc_info=True,
         )
         return ""
+
+
+def get_filing_sections(ticker: str, accession_number: str) -> list[dict[str, Any]]:
+    """Return the item-based sections available in a filing."""
+    try:
+        filing = _find_company_filing(ticker, accession_number)
+        if filing is None:
+            return []
+
+        sections = list_filing_item_sections(filing.markdown())
+        filing_metadata = {
+            "accession_number": getattr(filing, "accession_no", None),
+            "form_type": getattr(filing, "form", None),
+            "filing_date": str(getattr(filing, "filing_date", "") or ""),
+        }
+        return [{**filing_metadata, **section} for section in sections]
+    except Exception:
+        log.warning(
+            "Could not list filing sections for %s / %s",
+            ticker,
+            accession_number,
+            exc_info=True,
+        )
+        return []
+
+
+def get_filing_section(
+    ticker: str,
+    accession_number: str,
+    section_name: str,
+) -> dict[str, Any]:
+    """Return one item-based filing section matched by code or title."""
+    try:
+        filing = _find_company_filing(ticker, accession_number)
+        if filing is None:
+            return {}
+
+        section = extract_filing_item_section(filing.markdown(), section_name)
+        if not section:
+            return {}
+
+        return {
+            "accession_number": getattr(filing, "accession_no", None),
+            "form_type": getattr(filing, "form", None),
+            "filing_date": str(getattr(filing, "filing_date", "") or ""),
+            **section,
+        }
+    except Exception:
+        log.warning(
+            "Could not retrieve filing section for %s / %s / %s",
+            ticker,
+            accession_number,
+            section_name,
+            exc_info=True,
+        )
+        return {}
 
 
 def get_insider_trades(

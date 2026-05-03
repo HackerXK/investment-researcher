@@ -112,8 +112,10 @@ call multiple tools if the question spans several companies or data types.
 - You are NOT limited to annual data — use quarterly, TTM, and time-series \
   tools when the question warrants it.
 - You can read ANY SEC filing type (10-K, 10-Q, 8-K, DEF 14A, etc.), not \
-  just the latest 10-K.  Use list_filings to discover available filings, \
-  then read_filing to read them.
+    just the latest 10-K. Use list_filings to discover available filings.
+- For targeted 10-K, 10-Q, or 8-K narrative questions, prefer
+        list_filing_sections and read_filing_section before reading the full filing.
+- Use read_filing only when you genuinely need the broader filing context.
 - For insider trading / Form 4 questions, prefer get_insider_trades with an
     explicit date range instead of relying on only the most recent list_filings
     window.
@@ -198,6 +200,8 @@ _TOOL_PROGRESS_MESSAGES = {
     "list_available_ratios": "loading available ratios",
     "compare_metric_across_companies": "comparing companies",
     "list_filings": "searching filings",
+    "list_filing_sections": "mapping filing sections",
+    "read_filing_section": "reading filing sections",
     "read_filing": "reading SEC filings",
     "get_insider_trades": "analyzing insider trades",
     "summarize_insider_sells": "summarizing insider sales",

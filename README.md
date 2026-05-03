@@ -25,7 +25,7 @@ Four main workflows:
 **Agentic chat** — an AI financial analyst that can autonomously plan and execute multi-step analyses:
 
 - Built with the [OpenAI Agents SDK](https://github.com/openai/openai-agents-python) using `OpenAIChatCompletionsModel` for compatibility with local vLLM / any OpenAI-compatible endpoint.
-- The agent has 19 tools wrapping the full analytics surface: company search, metric pivots, growth rates, TTM metrics, quarterly detail, ~46 financial ratios, cashflow analysis, cross-company comparison, SEC filing retrieval/reading, and structured Form 4 insider-trade analysis.
+- The agent has 28 tools wrapping the analytics and SEC research surface: company discovery, time-series analytics, ratios, cross-company comparison, filing discovery, section-aware filing reading, and structured Form 4, 8-K, DEF 14A, and 13F analysis.
 - Streams responses via SSE (`data: {"token": "..."}` / `data: [DONE]`) to the Nuxt 3 frontend chat panel.
 - Tracing is disabled by default (no OpenAI platform key needed).
 
@@ -281,7 +281,7 @@ The chat backend uses the [OpenAI Agents SDK](https://github.com/openai/openai-a
 ### How it works
 
 1. The user sends a question via the Nuxt 3 frontend chat panel (or the `/api/chat` REST endpoint).
-2. The backend constructs an `Agent` with 26 tools wrapping the full analytics surface.
+2. The backend constructs an `Agent` with 28 tools wrapping the full analytics surface.
 3. `Runner.run_streamed()` lets the agent plan tool calls, execute them, and stream the final response token-by-token via SSE.
 4. The frontend renders tokens incrementally — same SSE format as before (`data: {"token": "..."}` / `data: [DONE]`).
 
@@ -306,6 +306,8 @@ The chat backend uses the [OpenAI Agents SDK](https://github.com/openai/openai-a
 | `list_available_ratios` | All ~46 ratios grouped by category |
 | `compare_metric_across_companies` | Cross-company metric comparison |
 | `list_filings` | Discover SEC filings by type (10-K, 10-Q, 8-K, etc.) |
+| `list_filing_sections` | List item-based sections inside a filing so the agent can target Item 1A, Item 7, Item 5.02, and similar sections directly |
+| `read_filing_section` | Read one item-based filing section with accession and section metadata instead of loading the whole filing |
 | `read_filing` | Read full text of any SEC filing by accession number |
 | `get_insider_trades` | Structured Form 4 transactions across a date range, including insider, tx date, code, shares, proceeds, and significance bucket |
 | `summarize_insider_sells` | Grouped Form 4 sell summaries by insider or transaction code |
@@ -465,7 +467,7 @@ Each data store has a `_HOST_SOURCE` variable (Docker bind mount source on the h
 │   ├── web/
 │   │   ├── app.py                  # FastAPI REST API + chat endpoint
 │   │   ├── chat.py                 # Agentic chat — Agent + Runner streaming
-│   │   └── agent_tools.py          # 18 @function_tool wrappers for analytics
+│   │   └── agent_tools.py          # 28 @function_tool wrappers for analytics + SEC research
 │   ├── flows/
 │   │   └── sec_data.py             # Seed, fast-path, and slow-path Prefect flows
 │   └── ingestion/

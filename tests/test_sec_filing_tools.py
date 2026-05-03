@@ -647,3 +647,89 @@ def test_get_institutional_holdings_normalizes_berkshire_manager_alias(monkeypat
     holdings = analytics.get_institutional_holdings(manager="Berkshire Hathaway", limit=10)
 
     assert holdings[0]["ticker"] == "GOOGL"
+
+
+def test_get_filing_sections_dedupes_table_of_contents_matches(monkeypatch):
+    filing_text = """# NVIDIA CORPORATION
+
+Item 1. Business
+Item 1A. Risk Factors
+Item 1B. Unresolved Staff Comments
+
+## Item 1. Business
+Actual business discussion.
+
+## Item 1A. Risk Factors
+Actual risk discussion that should be surfaced.
+More risk detail.
+
+## Item 1B. Unresolved Staff Comments
+None.
+"""
+    filing = SimpleNamespace(
+        accession_no="0001045810-26-000010",
+        form="10-K",
+        filing_date="2026-02-20",
+        markdown=lambda: filing_text,
+    )
+
+    class FakeCompany:
+        def __init__(self, ticker: str):
+            assert ticker == "NVDA"
+
+        def get_filings(self):
+            return [filing]
+
+    monkeypatch.setitem(sys.modules, "edgar", SimpleNamespace(Company=FakeCompany))
+
+    sections = analytics.get_filing_sections("NVDA", "0001045810-26-000010")
+
+    risk_sections = [section for section in sections if section["item_code"] == "1A"]
+    assert len(risk_sections) == 1
+    assert risk_sections[0]["heading"] == "Item 1A. Risk Factors"
+    assert risk_sections[0]["preview"].startswith(
+        "Actual risk discussion that should be surfaced."
+    )
+
+
+def test_get_filing_section_returns_actual_body_not_toc(monkeypatch):
+    filing_text = """# NVIDIA CORPORATION
+
+Item 1. Business
+Item 1A. Risk Factors
+Item 1B. Unresolved Staff Comments
+
+## Item 1. Business
+Actual business discussion.
+
+## Item 1A. Risk Factors
+Actual risk discussion that should be surfaced.
+More risk detail.
+
+## Item 1B. Unresolved Staff Comments
+None.
+"""
+    filing = SimpleNamespace(
+        accession_no="0001045810-26-000010",
+        form="10-K",
+        filing_date="2026-02-20",
+        markdown=lambda: filing_text,
+    )
+
+    class FakeCompany:
+        def __init__(self, ticker: str):
+            assert ticker == "NVDA"
+
+        def get_filings(self):
+            return [filing]
+
+    monkeypatch.setitem(sys.modules, "edgar", SimpleNamespace(Company=FakeCompany))
+
+    section = analytics.get_filing_section("NVDA", "0001045810-26-000010", "risk factors")
+
+    assert section["accession_number"] == "0001045810-26-000010"
+    assert section["form_type"] == "10-K"
+    assert section["item_code"] == "1A"
+    assert section["heading"] == "Item 1A. Risk Factors"
+    assert "Actual risk discussion that should be surfaced." in section["content"]
+    assert "## Item 1A. Risk Factors" in section["content"]

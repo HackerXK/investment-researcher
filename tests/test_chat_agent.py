@@ -38,10 +38,12 @@ from investment_researcher.web.agent_tools import (
     get_ticker_summary,
     get_ttm_metrics,
     get_ttm_ratios,
+    list_filing_sections,
     list_available_ratios,
     list_available_tickers,
     list_filings,
     read_filing,
+    read_filing_section,
     search_companies,
     summarize_insider_sells,
     summarize_institutional_holdings,
@@ -93,6 +95,8 @@ class TestAgentConstruction:
             "list_available_ratios",
             "compare_metric_across_companies",
             "list_filings",
+            "list_filing_sections",
+            "read_filing_section",
             "read_filing",
             "get_insider_trades",
             "summarize_insider_sells",
@@ -144,6 +148,20 @@ class TestToolOutputs:
         assert "[... skipped to Item 1A. Risk Factors ...]" in truncated
         assert "## Item 1A. Risk Factors" in truncated
         assert "Demand volatility" in truncated
+
+    def test_truncate_filing_text_uses_real_item_1a_body_not_toc_match(self):
+        toc = "\nItem 1A. Risk Factors\nItem 1B. Unresolved Staff Comments\n"
+        head = toc + ("A" * (agent_tools_module._MAX_FILING_CHARS + 500))
+        actual_section = (
+            "\n## Item 1A. Risk Factors\n"
+            "Actual risk discussion that should survive truncation.\n"
+            "\n## Item 1B. Unresolved Staff Comments\n"
+        )
+
+        truncated = agent_tools_module._truncate_filing_text(head + actual_section)
+
+        assert "[... skipped to Item 1A. Risk Factors ...]" in truncated
+        assert "Actual risk discussion that should survive truncation." in truncated
 
     def test_truncate_filing_text_leaves_short_filing_unchanged(self):
         text = "Short filing text"
@@ -336,6 +354,21 @@ class TestToolSchemas:
         props = tool.params_json_schema.get("properties", {})
         assert "ticker" in props
         assert "accession_number" in props
+        assert "truncate" in props
+        assert "max_chars" in props
+
+    def test_list_filing_sections_schema(self):
+        tool = self._get_tool_by_name("list_filing_sections")
+        props = tool.params_json_schema.get("properties", {})
+        assert "ticker" in props
+        assert "accession_number" in props
+
+    def test_read_filing_section_schema(self):
+        tool = self._get_tool_by_name("read_filing_section")
+        props = tool.params_json_schema.get("properties", {})
+        assert "ticker" in props
+        assert "accession_number" in props
+        assert "section_name" in props
         assert "truncate" in props
         assert "max_chars" in props
 

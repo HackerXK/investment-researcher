@@ -32,6 +32,10 @@ _FORM4_CODE_DESCRIPTIONS = {
 _NOTABLE_TRADE_VALUE = 100_000.0
 _VERY_NOTABLE_TRADE_VALUE = 1_000_000.0
 _DEFAULT_EVENT_SUMMARY_CHARS = 2_000
+_ITEM_SECTION_HEADING_RE = re.compile(
+    r"(?im)^(?:#{1,6}\s*)?(?P<heading>item\s+(?P<item_code>\d+(?:\.\d+)?[a-z]?)\.?"
+    r"(?:\s+(?P<title>[^\n]+?))?)\s*$"
+)
 
 
 def build_filing_date_filter(
@@ -166,6 +170,141 @@ def unique_nonempty(values: Iterable[Any]) -> list[Any]:
             seen.add(value)
             result.append(value)
     return result
+
+
+def _normalize_section_key(value: Any) -> str | None:
+    """Normalize a section selector or title into a compact lookup key."""
+    if value is None:
+        return None
+    normalized = re.sub(r"[^a-z0-9]+", "", str(value).strip().lower())
+    return normalized or None
+
+
+def _normalize_section_item_code(value: str | None) -> str | None:
+    """Normalize a filing item code to a stable uppercase representation."""
+    if not value:
+        return None
+    normalized = re.sub(r"[^0-9a-z.]+", "", str(value).strip().lower())
+    return normalized.upper() or None
+
+
+def _normalize_section_title(value: str | None) -> str | None:
+    """Normalize an extracted section title for display and matching."""
+    if not value:
+        return None
+    normalized = re.sub(r"\s+", " ", value).strip(" .:-")
+    normalized = re.sub(r"\s+\d+$", "", normalized).strip()
+    return normalized or None
+
+
+def _parse_filing_item_sections(text: str) -> list[dict[str, Any]]:
+    """Parse item-based SEC sections from filing markdown.
+
+    When the same item heading appears multiple times, keep the last occurrence.
+    This avoids locking onto table-of-contents matches instead of the actual
+    section body.
+    """
+    if not text:
+        return []
+
+    raw_sections: list[dict[str, Any]] = []
+    for match in _ITEM_SECTION_HEADING_RE.finditer(text):
+        heading = re.sub(r"\s+", " ", match.group("heading")).strip()
+        item_code = _normalize_section_item_code(match.group("item_code"))
+        if not item_code:
+            continue
+        title = _normalize_section_title(match.group("title"))
+        raw_sections.append(
+            {
+                "heading": heading,
+                "item_code": item_code,
+                "item_key": _normalize_section_key(item_code),
+                "title": title,
+                "title_key": _normalize_section_key(title),
+                "start": match.start(),
+                "heading_end": match.end(),
+                "line_number": text.count("\n", 0, match.start()) + 1,
+            }
+        )
+
+    if not raw_sections:
+        return []
+
+    last_index_by_code = {
+        section["item_key"]: index
+        for index, section in enumerate(raw_sections)
+    }
+    sections = [
+        section.copy()
+        for index, section in enumerate(raw_sections)
+        if last_index_by_code[section["item_key"]] == index
+    ]
+
+    for index, section in enumerate(sections):
+        end = sections[index + 1]["start"] if index + 1 < len(sections) else len(text)
+        content = text[section["start"]:end].strip()
+        body = text[section["heading_end"]:end].strip()
+        match_keys = {
+            section["item_key"],
+            _normalize_section_key(f"item {section['item_code']}"),
+            _normalize_section_key(section["heading"]),
+        }
+        if section["title_key"]:
+            match_keys.add(section["title_key"])
+
+        section["content"] = content
+        section["body"] = body
+        section["text_length"] = len(content)
+        section["match_keys"] = {key for key in match_keys if key}
+
+    return sections
+
+
+def _section_selector_matches(section: dict[str, Any], selector_key: str) -> bool:
+    """Return whether a normalized selector targets the parsed filing section."""
+    if selector_key in section.get("match_keys", set()):
+        return True
+
+    title_key = section.get("title_key") or ""
+    if selector_key == "mda" and "management" in title_key and "discussion" in title_key:
+        return True
+
+    return False
+
+
+def list_filing_item_sections(text: str) -> list[dict[str, Any]]:
+    """Return the item-based sections discovered in filing markdown."""
+    sections = _parse_filing_item_sections(text)
+    return [
+        {
+            "item_code": section["item_code"],
+            "heading": section["heading"],
+            "title": section["title"],
+            "line_number": section["line_number"],
+            "text_length": section["text_length"],
+            "preview": text_excerpt(section["body"] or section["content"], 280),
+        }
+        for section in sections
+    ]
+
+
+def extract_filing_item_section(text: str, section_name: str) -> dict[str, Any] | None:
+    """Return one parsed filing section matched by item code or section title."""
+    selector_key = _normalize_section_key(section_name)
+    if not selector_key:
+        return None
+
+    for section in _parse_filing_item_sections(text):
+        if _section_selector_matches(section, selector_key):
+            return {
+                "item_code": section["item_code"],
+                "heading": section["heading"],
+                "title": section["title"],
+                "line_number": section["line_number"],
+                "text_length": section["text_length"],
+                "content": section["content"],
+            }
+    return None
 
 
 def extract_form4_trades(

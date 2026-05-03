@@ -19,6 +19,8 @@ from investment_researcher.analytics import (
     cashflow_pivot,
     get_all_tickers,
     get_company_profile as _get_company_profile,
+    get_filing_section as _get_filing_section,
+    get_filing_sections as _get_filing_sections,
     get_filings_list as _get_filings_list,
     get_filing_text as _get_filing_text,
     get_insider_trades as _get_insider_trades,
@@ -43,6 +45,7 @@ from investment_researcher.analytics import (
     ticker_summary,
     ttm_metrics,
 )
+from investment_researcher.analytics.sec_filings import extract_filing_item_section
 
 log = logging.getLogger(__name__)
 
@@ -91,23 +94,13 @@ def _normalize_optional_str_list(value: list[str] | str | None) -> list[str] | N
     return normalized or None
 
 
-def _extract_filing_section(text: str, heading_patterns: list[str]) -> str | None:
-    """Extract a filing section starting at a matched heading through the next item."""
-    for pattern in heading_patterns:
-        match = re.search(pattern, text)
-        if not match:
-            continue
-        start = match.start()
-        end = len(text)
-        search_start = match.end()
-        next_match = re.search(
-            r"(?im)^#+\s*item\s+\d+[a-z]?\.?\b|^item\s+\d+[a-z]?\.?\b",
-            text[search_start:],
-        )
-        if next_match:
-            end = search_start + next_match.start()
-        return text[start:end].strip()
-    return None
+def _extract_filing_section(text: str, section_name: str) -> str | None:
+    """Extract one item-based filing section using the shared parser."""
+    section = extract_filing_item_section(text, section_name)
+    if not section:
+        return None
+    content = section.get("content")
+    return str(content).strip() if content else None
 
 
 def _truncate_text_with_notice(text: str, max_chars: int) -> str:
@@ -134,13 +127,7 @@ def _truncate_filing_text(text: str, max_chars: int = _MAX_FILING_CHARS) -> str:
     if remaining <= 256:
         return _truncate_text_with_notice(text, max_chars)
 
-    risk_section = _extract_filing_section(
-        text,
-        [
-            r"(?im)^#+\s*item\s+1a\.?\s+risk factors\b",
-            r"(?im)^item\s+1a\.?\s+risk factors\b",
-        ],
-    )
+    risk_section = _extract_filing_section(text, "1A")
     if risk_section and risk_section not in head and remaining > 256:
         marker = "\n\n[... skipped to Item 1A. Risk Factors ...]\n"
         excerpt_budget = max(0, remaining - len(marker))
@@ -478,6 +465,62 @@ def read_filing(
 
 
 @function_tool
+def list_filing_sections(ticker: str, accession_number: str) -> str:
+    """List the item-based sections available in a filing.
+
+    Use this before read_filing_section for targeted 10-K, 10-Q, and 8-K
+    narrative analysis. Returns item code, heading, preview, and length.
+
+    Args:
+        ticker: Stock ticker symbol.
+        accession_number: SEC accession number from list_filings.
+    """
+    results = _get_filing_sections(ticker, accession_number)
+    return json.dumps(results, default=str)
+
+
+@function_tool
+def read_filing_section(
+    ticker: str,
+    accession_number: str,
+    section_name: str,
+    truncate: bool = True,
+    max_chars: int = _MAX_FILING_CHARS,
+) -> str:
+    """Read one item-based section from an SEC filing as structured JSON.
+
+    Prefer this over read_filing when the question targets a specific section,
+    such as Item 1A Risk Factors or Item 7 Management's Discussion.
+
+    Args:
+        ticker: Stock ticker symbol.
+        accession_number: SEC accession number from list_filings.
+        section_name: Item code or section title, e.g. "1A", "risk factors", "7".
+        truncate: Whether to keep the practical truncation guard.
+        max_chars: Maximum characters to return when truncate=true.
+    """
+    result = _get_filing_section(ticker, accession_number, section_name)
+    if not result:
+        return _dict_to_json(
+            {
+                "error": "Filing section not found or could not be retrieved.",
+                "accession_number": accession_number,
+                "section_name": section_name,
+            }
+        )
+
+    content = str(result.get("content") or "")
+    if not truncate:
+        result["truncated"] = False
+        return _dict_to_json(result)
+
+    truncated_content = _truncate_text_with_notice(content, max_chars)
+    result["content"] = truncated_content
+    result["truncated"] = truncated_content != content
+    return _dict_to_json(result)
+
+
+@function_tool
 def get_insider_trades(
     ticker: str,
     start_date: str,
@@ -794,6 +837,8 @@ ALL_TOOLS = [
     compare_metric_across_companies,
     # SEC filings
     list_filings,
+    list_filing_sections,
+    read_filing_section,
     read_filing,
     get_insider_trades,
     summarize_insider_sells,
