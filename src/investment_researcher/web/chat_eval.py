@@ -8,12 +8,14 @@ with a second LLM pass using compact SEC-derived evidence.
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
 import os
 import re
+import sys
 import time
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
 from uuid import uuid4
@@ -22,6 +24,12 @@ import pandas as pd
 from dotenv import load_dotenv
 from httpx import ASGITransport, AsyncClient
 from openai import AsyncOpenAI
+
+from investment_researcher.analytics.sec_filings import (
+    extract_narrative_highlight_candidates as sec_extract_narrative_highlight_candidates,
+    extract_risk_highlight_candidates as sec_extract_risk_highlight_candidates,
+    extract_risk_theme_candidates as sec_extract_risk_theme_candidates,
+)
 
 
 _HOST_RUNTIME_ENV_MAP = (
@@ -32,8 +40,24 @@ _HOST_RUNTIME_ENV_MAP = (
     ("STATE_DB_PATH_HOST_SOURCE", "STATE_DB_PATH_RUNTIME"),
 )
 
+_RUNTIME_CONFIG_MODULES = (
+    "investment_researcher.config",
+    "investment_researcher.analytics",
+    "investment_researcher.analytics.queries",
+    "investment_researcher.metrics",
+    "investment_researcher.ratios",
+    "investment_researcher.ingestion.timeseries",
+    "investment_researcher.ingestion.state",
+    "investment_researcher.ingestion.edgar.storage",
+    "investment_researcher.web.chat",
+    "investment_researcher.web.tracing",
+    "investment_researcher.web.app",
+)
+
 _MAX_EVIDENCE_CHARS = 64_000
 _MAX_FILING_EXCERPT_CHARS = 24_000
+_MAX_RISK_SECTION_EXCERPT_CHARS = 160_000
+_MAX_RISK_SECTION_EVIDENCE_CHARS = 160_000
 _EVIDENCE_TIMEOUT_SECONDS = 300
 _EMPTY_ANSWER_RETRY_SUFFIX = (
     "Provide a complete final answer. Do not return a blank or whitespace-only "
@@ -132,6 +156,14 @@ class ChatEvaluationResult:
         }
 
 
+def _reload_runtime_config_modules() -> None:
+    """Reload modules that cache runtime paths from `investment_researcher.config`."""
+    for module_name in _RUNTIME_CONFIG_MODULES:
+        module = sys.modules.get(module_name)
+        if module is not None:
+            importlib.reload(module)
+
+
 def prepare_live_environment(project_root: Path) -> dict[str, str]:
     """Load .env and translate Docker runtime paths to host paths."""
     env_path = project_root / ".env"
@@ -143,6 +175,8 @@ def prepare_live_environment(project_root: Path) -> dict[str, str]:
         if host_value:
             os.environ[runtime_var] = host_value
             applied[runtime_var] = host_value
+
+    _reload_runtime_config_modules()
 
     required = ["LLM_API_BASE", "LLM_MODEL", "LLM_API_KEY"]
     missing = [name for name in required if not os.getenv(name)]
@@ -377,6 +411,111 @@ def _compact_material_event_rows(rows: list[dict[str, Any]]) -> list[dict[str, A
     return compact_rows
 
 
+def _compact_beneficial_ownership_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    compact_rows: list[dict[str, Any]] = []
+    for row in rows:
+        compact_rows.append(
+            {
+                "accession_number": row.get("accession_number"),
+                "form_type": row.get("form_type"),
+                "filing_date": row.get("filing_date"),
+                "event_date": row.get("event_date"),
+                "issuer_name": row.get("issuer_name"),
+                "total_shares": row.get("total_shares"),
+                "total_percent": row.get("total_percent"),
+                "reporting_person_names": row.get("reporting_person_names"),
+                "is_amendment": row.get("is_amendment"),
+                "rule_designation": row.get("rule_designation"),
+                "is_passive_investor": row.get("is_passive_investor"),
+                "purpose_of_transaction": row.get("purpose_of_transaction"),
+            }
+        )
+    return compact_rows
+
+
+def _compact_filing_record(filing: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "accession_number": filing.get("accession_number"),
+        "form_type": filing.get("form_type"),
+        "filing_date": filing.get("filing_date"),
+        "description": filing.get("description"),
+    }
+
+
+def _compact_filing_sections(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    compact_rows: list[dict[str, Any]] = []
+    for row in rows:
+        compact_rows.append(
+            {
+                "section_key": row.get("section_key"),
+                "item_code": row.get("item_code"),
+                "heading": row.get("heading"),
+            }
+        )
+    return compact_rows
+
+
+def _compact_filing_section(section: dict[str, Any]) -> dict[str, Any]:
+    if not section:
+        return {}
+    item_code = str(section.get("item_code") or "").upper().strip()
+    heading = str(section.get("heading") or "")
+    heading_lower = heading.lower()
+    is_risk_section = item_code == "1A" or "risk factor" in heading.lower()
+    is_mdna_section = "management" in heading_lower and "discussion" in heading_lower
+    content_limit = (
+        _MAX_RISK_SECTION_EXCERPT_CHARS
+        if is_risk_section or is_mdna_section
+        else _MAX_FILING_EXCERPT_CHARS
+    )
+    payload = {
+        "section_key": section.get("section_key"),
+        "item_code": section.get("item_code"),
+        "heading": section.get("heading"),
+        "content": str(section.get("content", ""))[:content_limit],
+    }
+    narrative_text = "\n".join(
+        part
+        for part in [heading.strip(), str(section.get("content") or "").strip()]
+        if part
+    )
+    if is_risk_section:
+        risk_highlights = sec_extract_risk_highlight_candidates(
+            narrative_text,
+            max_candidates=6,
+        )
+        if risk_highlights:
+            payload["risk_highlights"] = risk_highlights
+        theme_candidates = sec_extract_risk_theme_candidates(
+            narrative_text,
+            max_candidates=10,
+        )
+        if theme_candidates:
+            payload["theme_candidates"] = theme_candidates
+    elif is_mdna_section:
+        section_highlights = sec_extract_narrative_highlight_candidates(
+            narrative_text,
+            max_candidates=6,
+        )
+        if section_highlights:
+            payload["section_highlights"] = section_highlights
+    return payload
+
+
+def _compact_filing_search_matches(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    compact_rows: list[dict[str, Any]] = []
+    for row in rows:
+        compact_rows.append(
+            {
+                "item_code": row.get("item_code"),
+                "heading": row.get("heading"),
+                "line_number": row.get("line_number"),
+                "excerpt": row.get("excerpt"),
+            }
+        )
+    return compact_rows
+
+
 def _parse_quarter_label(period_label: str) -> str | None:
     match = re.search(r"(\d{2})/(\d{2})/(\d{4})", period_label)
     if not match:
@@ -492,7 +631,7 @@ def _extract_filing_excerpt(text: str, needle: str = "risk factors") -> str:
             end_match = re.search(end_pattern, text[start + 1 :])
             if end_match:
                 end = min(end, start + 1 + end_match.start())
-        return text[start:min(end, start + _MAX_FILING_EXCERPT_CHARS)]
+        return text[start:min(end, start + _MAX_RISK_SECTION_EXCERPT_CHARS)]
 
     lower = text.lower()
     match = re.search(re.escape(needle), lower)
@@ -507,7 +646,11 @@ def build_evidence_bundle(question: ChatEvalQuestionLike) -> EvidenceBundle:
     """Build compact authoritative evidence for one question."""
     from investment_researcher.analytics import (
         cashflow_timeseries,
+        compare_filing_sections,
+        get_beneficial_ownership,
         get_filings_list,
+        get_filing_section,
+        get_filing_sections,
         get_filing_text,
         get_insider_trades,
         get_institutional_holdings,
@@ -520,6 +663,8 @@ def build_evidence_bundle(question: ChatEvalQuestionLike) -> EvidenceBundle:
         metric_timeseries,
         quarterly_detail,
         ratio_timeseries,
+        search_filing_text,
+        summarize_beneficial_ownership,
         summarize_insider_sells,
         summarize_institutional_holdings,
         ttm_metrics,
@@ -589,6 +734,138 @@ def build_evidence_bundle(question: ChatEvalQuestionLike) -> EvidenceBundle:
             end_date=params.get("end_date"),
             top_n=params.get("top_n", 10),
             min_value=params.get("min_value", 0.0),
+        )
+        return EvidenceBundle(kind=kind, summary=_compact_json(payload), payload=payload)
+
+    if kind == "beneficial_ownership_summary":
+        payload = summarize_beneficial_ownership(
+            ticker=params["ticker"],
+            form_type=params.get("form_type"),
+            limit=params.get("limit", 10),
+            start_date=params.get("start_date"),
+            end_date=params.get("end_date"),
+            include_amendments=params.get("include_amendments", True),
+            summary_chars=params.get("summary_chars", 2_000),
+        )
+        return EvidenceBundle(kind=kind, summary=_compact_json(payload), payload=payload)
+
+    if kind == "beneficial_ownership_rows":
+        rows = get_beneficial_ownership(
+            ticker=params["ticker"],
+            form_type=params.get("form_type"),
+            limit=params.get("limit", 10),
+            start_date=params.get("start_date"),
+            end_date=params.get("end_date"),
+            include_amendments=params.get("include_amendments", True),
+            summary_chars=params.get("summary_chars", 2_000),
+        )
+        payload = _compact_beneficial_ownership_rows(rows)
+        return EvidenceBundle(kind=kind, summary=_compact_json(payload), payload=payload)
+
+    if kind == "latest_filing_sections":
+        filings = get_filings_list(
+            params["ticker"],
+            form_type=params.get("form_type"),
+            limit=params.get("limit", 1),
+            start_date=params.get("start_date"),
+            end_date=params.get("end_date"),
+            include_amendments=params.get("include_amendments", False),
+        )
+        if not filings:
+            return EvidenceBundle(kind=kind, summary="[]", payload=[])
+        latest_filing = filings[0]
+        sections = get_filing_sections(params["ticker"], latest_filing["accession_number"])
+        payload = {
+            "filing": _compact_filing_record(latest_filing),
+            "sections": _compact_filing_sections(sections),
+        }
+        return EvidenceBundle(kind=kind, summary=_compact_json(payload), payload=payload)
+
+    if kind == "latest_filing_section":
+        filings = get_filings_list(
+            params["ticker"],
+            form_type=params.get("form_type"),
+            limit=params.get("limit", 1),
+            start_date=params.get("start_date"),
+            end_date=params.get("end_date"),
+            include_amendments=params.get("include_amendments", False),
+        )
+        if not filings:
+            return EvidenceBundle(kind=kind, summary="[]", payload=[])
+        latest_filing = filings[0]
+        section = get_filing_section(
+            params["ticker"],
+            latest_filing["accession_number"],
+            params["section_name"],
+        )
+        payload = {
+            "filing": _compact_filing_record(latest_filing),
+            "section_name": params["section_name"],
+            "section": _compact_filing_section(section),
+        }
+        summary_max_chars = (
+            _MAX_RISK_SECTION_EVIDENCE_CHARS
+            if (
+                str(payload["section"].get("item_code") or "").upper().strip() == "1A"
+                or (
+                    "management" in str(payload["section"].get("heading") or "").lower()
+                    and "discussion" in str(payload["section"].get("heading") or "").lower()
+                )
+            )
+            else _MAX_EVIDENCE_CHARS
+        )
+        return EvidenceBundle(
+            kind=kind,
+            summary=_compact_json(payload, max_chars=summary_max_chars),
+            payload=payload,
+        )
+
+    if kind == "latest_filing_search":
+        filings = get_filings_list(
+            params["ticker"],
+            form_type=params.get("form_type"),
+            limit=params.get("limit", 1),
+            start_date=params.get("start_date"),
+            end_date=params.get("end_date"),
+            include_amendments=params.get("include_amendments", False),
+        )
+        if not filings:
+            return EvidenceBundle(kind=kind, summary="[]", payload=[])
+        latest_filing = filings[0]
+        matches = search_filing_text(
+            params["ticker"],
+            latest_filing["accession_number"],
+            params["query"],
+            section_name=params.get("section_name"),
+            max_matches=params.get("max_matches", 5),
+            context_chars=params.get("context_chars", 280),
+        )
+        payload = {
+            "filing": _compact_filing_record(latest_filing),
+            "query": params["query"],
+            "matches": _compact_filing_search_matches(matches),
+        }
+        return EvidenceBundle(kind=kind, summary=_compact_json(payload), payload=payload)
+
+    if kind == "latest_filing_section_comparison":
+        filings = get_filings_list(
+            params["ticker"],
+            form_type=params.get("form_type"),
+            limit=params.get("limit", 1),
+            start_date=params.get("start_date"),
+            end_date=params.get("end_date"),
+            include_amendments=params.get("include_amendments", False),
+        )
+        if not filings:
+            return EvidenceBundle(kind=kind, summary="[]", payload=[])
+        latest_filing = filings[0]
+        payload = compare_filing_sections(
+            ticker=params["ticker"],
+            current_accession_number=latest_filing["accession_number"],
+            section_name=params["section_name"],
+            previous_accession_number=params.get("previous_accession_number"),
+            max_changes=params.get("max_changes", 5),
+            excerpt_chars=params.get("excerpt_chars", 280),
         )
         return EvidenceBundle(kind=kind, summary=_compact_json(payload), payload=payload)
 

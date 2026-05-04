@@ -26,12 +26,19 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 
 from investment_researcher.analytics import (
+    compare_filing_sections as analytics_compare_filing_sections,
     cashflow_timeseries as analytics_cashflow_timeseries,
+    get_beneficial_ownership as analytics_get_beneficial_ownership,
+    get_filing_section as analytics_get_filing_section,
+    get_filing_sections as analytics_get_filing_sections,
     get_filing_text as analytics_get_filing_text,
     get_filings_list as analytics_get_filings_list,
     get_material_events as analytics_get_material_events,
     get_proxy_statement_data as analytics_get_proxy_statement_data,
+    growth_rates as analytics_growth_rates,
     quarterly_detail as analytics_quarterly_detail,
+    ratio_timeseries as analytics_ratio_timeseries,
+    search_filing_text as analytics_search_filing_text,
     summarize_insider_sells as analytics_summarize_insider_sells,
     summarize_institutional_holdings as analytics_summarize_institutional_holdings,
     ttm_metrics as analytics_ttm_metrics,
@@ -39,6 +46,9 @@ from investment_researcher.analytics import (
 from investment_researcher.config import LLM_API_BASE, LLM_API_KEY, LLM_MODEL
 from investment_researcher.analytics.sec_filings import (
     dataframe_records as sec_dataframe_records,
+    extract_narrative_highlight_candidates as sec_extract_narrative_highlight_candidates,
+    extract_risk_highlight_candidates as sec_extract_risk_highlight_candidates,
+    extract_risk_theme_candidates as sec_extract_risk_theme_candidates,
     summarize_institutional_holdings_rows,
 )
 from investment_researcher.web.agent_tools import ALL_TOOLS
@@ -493,6 +503,51 @@ def _extract_first_iso_date(text: str) -> str | None:
     return match.group(1) if match else None
 
 
+def _extract_search_query(text: str) -> str | None:
+    """Extract a simple filing-search query from prompts like 'mention about China'."""
+    match = re.search(r"mention(?:s)?\s+about\s+([^?.]+)", text, flags=re.IGNORECASE)
+    if not match:
+        return None
+    query = match.group(1).strip().strip('"\'')
+    return query or None
+
+
+def _normalize_text_key(value: Any) -> str:
+    """Normalize free text for coarse identity matching."""
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
+
+
+def _format_compact_percent(value: Any) -> str:
+    """Format a percentage with trimmed trailing zeros."""
+    if value is None:
+        return "N/A"
+    percent = float(value)
+    if percent.is_integer():
+        return f"{int(percent)}%"
+    return f"{percent:.2f}".rstrip("0").rstrip(".") + "%"
+
+
+def _dataframe_records_with_index(df: Any) -> list[dict[str, Any]]:
+    """Convert DataFrame-like results to records while preserving index keys."""
+    if df is None:
+        return []
+    if hasattr(df, "reset_index"):
+        try:
+            return sec_dataframe_records(df.reset_index())
+        except Exception:
+            pass
+    return sec_dataframe_records(df)
+
+
+def _record_period_end(row: dict[str, Any]) -> str:
+    """Return a stable period-end label from a serialized analytics row."""
+    for key in ("period_end", "index", "level_0"):
+        value = row.get(key)
+        if value:
+            return str(value)
+    return ""
+
+
 def _extract_explicit_tickers(text: str) -> list[str]:
     """Extract uppercase ticker-like tokens from free text in first-seen order."""
     ignore_tokens = {
@@ -593,86 +648,112 @@ def _extract_latest_fcf_row(cashflow_rows: list[dict[str, Any]]) -> dict[str, An
     return _latest_metric_row(cashflow_rows, "free_cash_flow")
 
 
-def _extract_risk_excerpt(text: str) -> str:
-    """Extract the Item 1A risk section or a nearby fallback excerpt."""
+def _extract_item_section_excerpt(
+    text: str,
+    section_patterns: list[str],
+    next_section_patterns: list[str],
+    fallback_needles: list[str],
+) -> str:
+    """Extract one narrative 10-K section or fall back to a nearby tail excerpt."""
     if not text:
         return ""
-    section_patterns = [
-        r"(?im)^#+\s*item\s+1a\.?\s+risk factors\b",
-        r"(?im)^item\s+1a\.?\s+risk factors\b",
-        r"(?im)^item\s+1a\.?\b",
-    ]
     for pattern in section_patterns:
         match = re.search(pattern, text)
         if not match:
             continue
         start = match.start()
         end = len(text)
-        for end_pattern in [
-            r"(?im)^#+\s*item\s+1b\.?\b",
-            r"(?im)^#+\s*item\s+1c\.?\b",
-            r"(?im)^#+\s*item\s+2\.?\b",
-            r"(?im)^item\s+1b\.?\b",
-            r"(?im)^item\s+1c\.?\b",
-            r"(?im)^item\s+2\.?\b",
-        ]:
+        for end_pattern in next_section_patterns:
             end_match = re.search(end_pattern, text[start + 1 :])
             if end_match:
                 end = min(end, start + 1 + end_match.start())
         return text[start:end].strip()
 
     lowered = text.lower()
-    marker = lowered.find("risk factors")
-    if marker == -1:
-        return text[:8000]
-    start = max(0, marker - 800)
-    return text[start:start + 8000]
+    for needle in fallback_needles:
+        marker = lowered.find(needle)
+        if marker != -1:
+            start = max(0, marker - 800)
+            return text[start:]
+    return text
+
+
+def _extract_risk_excerpt(text: str) -> str:
+    """Extract the full Item 1A risk section or a nearby fallback excerpt."""
+    return _extract_item_section_excerpt(
+        text,
+        [
+            r"(?im)^#+\s*item\s+1a\.?\s+risk factors\b",
+            r"(?im)^item\s+1a\.?\s+risk factors\b",
+            r"(?im)^item\s+1a\.?\b",
+        ],
+        [
+            r"(?im)^#+\s*item\s+1b\.?\b",
+            r"(?im)^#+\s*item\s+1c\.?\b",
+            r"(?im)^#+\s*item\s+2\.?\b",
+            r"(?im)^item\s+1b\.?\b",
+            r"(?im)^item\s+1c\.?\b",
+            r"(?im)^item\s+2\.?\b",
+        ],
+        ["risk factors"],
+    )
+
+
+def _extract_mdna_excerpt(text: str) -> str:
+    """Extract the full MD&A section or a nearby fallback excerpt."""
+    return _extract_item_section_excerpt(
+        text,
+        [
+            r"(?im)^#+\s*item\s+7\.?\s+management'?s discussion(?:\s+and\s+analysis(?:\s+of\s+financial\s+condition\s+and\s+results\s+of\s+operations)?)?\b",
+            r"(?im)^item\s+7\.?\s+management'?s discussion(?:\s+and\s+analysis(?:\s+of\s+financial\s+condition\s+and\s+results\s+of\s+operations)?)?\b",
+            r"(?im)^#+\s*item\s+7\.?\b",
+            r"(?im)^item\s+7\.?\b",
+        ],
+        [
+            r"(?im)^#+\s*item\s+7a\.?\b",
+            r"(?im)^#+\s*item\s+8\.?\b",
+            r"(?im)^item\s+7a\.?\b",
+            r"(?im)^item\s+8\.?\b",
+        ],
+        ["management's discussion", "management discussion and analysis"],
+    )
+
+
+def _extract_narrative_highlight_candidates(excerpt: str) -> list[str]:
+    """Extract concise highlights from long narrative filing sections."""
+    return sec_extract_narrative_highlight_candidates(excerpt, max_candidates=12)
+
+
+def _extract_risk_highlight_candidates(excerpt: str) -> list[str]:
+    """Extract concise risk highlights from a 10-K Item 1A excerpt."""
+    return sec_extract_risk_highlight_candidates(excerpt, max_candidates=12)
 
 
 def _extract_risk_theme_candidates(excerpt: str) -> list[str]:
     """Extract concise risk-theme candidates from a 10-K Item 1A excerpt."""
-    lines = [line.strip() for line in excerpt.splitlines() if line.strip()]
-    candidates: list[str] = []
-    current_heading: str | None = None
+    return sec_extract_risk_theme_candidates(excerpt, max_candidates=12)
 
-    for line in lines:
-        normalized = line.lstrip("#").strip()
-        if normalized.lower() in {"risk factors summary", "item 1a. risk factors", "item 1a risk factors"}:
-            continue
-        if normalized.startswith("####"):
-            normalized = normalized.lstrip("#").strip()
-        if normalized.startswith("###"):
-            normalized = normalized.lstrip("#").strip()
 
-        if normalized and not normalized.startswith("•") and not normalized.startswith("-"):
-            if (
-                normalized.lower().startswith("risks related to")
-                or normalized.endswith("Markets")
-                or normalized.endswith("Manufacturing")
-                or normalized.endswith("Business")
-            ):
-                current_heading = normalized.rstrip(":")
-                continue
-
-        if not normalized.startswith("•"):
-            continue
-
-        bullet = normalized.lstrip("•").strip()
-        if not bullet:
-            continue
-        if current_heading:
-            candidates.append(f"{current_heading}: {bullet}")
-        else:
-            candidates.append(bullet)
-
-    deduped: list[str] = []
-    seen: set[str] = set()
+def _choose_distinct_section_highlights(candidates: list[str], limit: int = 2) -> list[str]:
+    """Pick distinct heading-prefixed highlights for direct filing answers."""
+    highlights: list[str] = []
+    seen_headings: set[str] = set()
     for candidate in candidates:
-        compact = " ".join(candidate.split())
-        if compact not in seen:
-            seen.add(compact)
-            deduped.append(compact)
-    return deduped
+        heading = candidate.split(":", 1)[0].strip() if ":" in candidate else candidate
+        if heading in seen_headings:
+            continue
+        seen_headings.add(heading)
+        highlights.append(candidate)
+        if len(highlights) == limit:
+            break
+    if len(highlights) < limit:
+        for candidate in candidates:
+            if candidate in highlights:
+                continue
+            highlights.append(candidate)
+            if len(highlights) == limit:
+                break
+    return highlights
 
 
 def _render_latest_10k_risk_answer(
@@ -682,33 +763,187 @@ def _render_latest_10k_risk_answer(
 ) -> str | None:
     """Render a direct answer for latest 10-K risk-theme questions."""
     excerpt = _extract_risk_excerpt(filing_text)
-    candidates = _extract_risk_theme_candidates(excerpt)
-    if not candidates:
+    highlight_candidates = _extract_risk_highlight_candidates(excerpt)
+    theme_candidates = _extract_risk_theme_candidates(excerpt)
+    if not highlight_candidates and not theme_candidates:
         return None
 
-    themes: list[str] = []
-    seen_headings: set[str] = set()
-    for candidate in candidates:
-        heading = candidate.split(":", 1)[0].strip() if ":" in candidate else candidate
-        if heading in seen_headings and len(themes) < 2:
-            continue
-        seen_headings.add(heading)
-        themes.append(candidate)
-        if len(themes) == 2:
-            break
-    if len(themes) < 2:
-        themes = candidates[:2]
+    themes = _choose_distinct_section_highlights(highlight_candidates + theme_candidates)
+    if not themes:
+        return None
 
     accession_number = filing.get("accession_number") or "N/A"
     filing_date = filing.get("filing_date") or "N/A"
     subject = f"{company_label}'s" if company_label else "The company's"
     lines = [
         f"{subject} latest 10-K was filed on {filing_date} with accession number {accession_number}.",
-        "Two risk themes highlighted in Item 1A are:",
+        "Two Item 1A risk points highlighted in the filing are:",
     ]
     for theme in themes:
         lines.append(f"- {theme}")
     return "\n".join(lines)
+
+
+def _render_latest_10k_mdna_answer(
+    company_label: str | None,
+    filing: dict[str, Any],
+    filing_text: str,
+) -> str | None:
+    """Render a direct answer for latest 10-K MD&A highlight questions."""
+    excerpt = _extract_mdna_excerpt(filing_text)
+    highlights = _choose_distinct_section_highlights(
+        _extract_narrative_highlight_candidates(excerpt)
+    )
+    if not highlights:
+        return None
+
+    accession_number = filing.get("accession_number") or "N/A"
+    filing_date = filing.get("filing_date") or "N/A"
+    subject = f"{company_label}'s" if company_label else "The company's"
+    lines = [
+        f"{subject} latest 10-K was filed on {filing_date} with accession number {accession_number}.",
+        "Two MD&A highlights in the filing are:",
+    ]
+    for highlight in highlights:
+        lines.append(f"- {highlight}")
+    return "\n".join(lines)
+
+
+def _render_latest_10k_search_answer(
+    filing: dict[str, Any],
+    query: str,
+    matches: list[dict[str, Any]],
+) -> str | None:
+    """Render a grounded answer from structured filing-search matches."""
+    if not matches:
+        return None
+
+    accession_number = filing.get("accession_number") or "N/A"
+    filing_date = filing.get("filing_date") or "N/A"
+    lines = [
+        f"The latest 10-K was filed on {filing_date} with accession number {accession_number}.",
+        f'Retrieved matches for "{query}" appear in:',
+    ]
+
+    seen: set[tuple[str, str]] = set()
+    for match in matches:
+        section_label = str(
+            match.get("heading")
+            or (f"Item {match.get('item_code')}" if match.get("item_code") else "Unlabeled section")
+        ).strip()
+        excerpt = " ".join(str(match.get("excerpt") or "").split())
+        if not section_label or not excerpt:
+            continue
+        key = (section_label, excerpt)
+        if key in seen:
+            continue
+        seen.add(key)
+        lines.append(f"- {section_label}: {excerpt}")
+
+    return "\n".join(lines) if len(lines) > 2 else None
+
+
+def _render_latest_filing_sections_answer(
+    filing: dict[str, Any],
+    sections: list[dict[str, Any]],
+) -> str | None:
+    """Render a grounded answer from parsed filing-section discovery output."""
+    accession_number = filing.get("accession_number") or "N/A"
+    filing_date = filing.get("filing_date") or "N/A"
+    if not sections:
+        return (
+            f"The latest 8-K was filed on {filing_date} with accession number {accession_number}. "
+            "I did not retrieve any parsed item sections from the filing markdown."
+        )
+
+    lines = [
+        f"The latest 8-K was filed on {filing_date} with accession number {accession_number}.",
+        "The parsed item sections are:",
+    ]
+    for section in sections:
+        item_code = str(section.get("item_code") or "").strip()
+        heading = str(section.get("heading") or "").strip()
+        if not item_code or not heading:
+            continue
+        lines.append(f"- Item {item_code}: {heading}")
+    return "\n".join(lines) if len(lines) > 2 else None
+
+
+def _render_filing_section_comparison_answer(comparison: dict[str, Any]) -> str | None:
+    """Render a grounded answer from structured filing-section comparison output."""
+    current_filing = comparison.get("current_filing") or {}
+    previous_filing = comparison.get("previous_filing") or {}
+    current_accession = str(current_filing.get("accession_number") or "").strip()
+    previous_accession = str(previous_filing.get("accession_number") or "").strip()
+    current_only_excerpts = [
+        " ".join(str(excerpt).split())
+        for excerpt in (comparison.get("current_only_excerpts") or [])
+        if str(excerpt).strip()
+    ]
+    if not current_accession or not previous_accession or not current_only_excerpts:
+        return None
+
+    excerpt = current_only_excerpts[0]
+    return "\n".join(
+        [
+            "Comparing the latest annual risk factor section with the prior annual filing, one new emphasis in the returned comparison is:",
+            f'- "{excerpt}"',
+            f"Latest filing accession number: {current_accession}",
+            f"Prior filing accession number: {previous_accession}",
+        ]
+    )
+
+
+def _select_primary_issuer_beneficial_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Prefer rows for the predominant issuer when a filer history mixes issuers."""
+    issuer_counts: dict[str, int] = {}
+    for row in rows:
+        issuer_key = _normalize_text_key(row.get("issuer_name"))
+        if not issuer_key:
+            continue
+        issuer_counts[issuer_key] = issuer_counts.get(issuer_key, 0) + 1
+    if not issuer_counts:
+        return rows
+    primary_issuer_key = max(issuer_counts.items(), key=lambda item: item[1])[0]
+    filtered = [
+        row for row in rows if _normalize_text_key(row.get("issuer_name")) == primary_issuer_key
+    ]
+    return filtered or rows
+
+
+def _render_beneficial_ownership_history_answer(
+    ticker: str | None,
+    requested_start_date: str | None,
+    rows: list[dict[str, Any]],
+) -> str | None:
+    """Render a grounded answer from structured beneficial ownership history rows."""
+    relevant_rows = _select_primary_issuer_beneficial_rows(rows)
+    if not relevant_rows:
+        return None
+
+    sorted_rows = sorted(
+        relevant_rows,
+        key=lambda row: (
+            str(row.get("filing_date") or ""),
+            str(row.get("accession_number") or ""),
+        ),
+        reverse=True,
+    )
+    company_label = ticker or relevant_rows[0].get("issuer_name") or "The company"
+    start_label = requested_start_date or "the requested start date"
+    lines = [
+        f"Since {start_label}, the recent beneficial ownership filings I retrieved for {company_label} are:",
+    ]
+    for row in sorted_rows:
+        filing_date = str(row.get("filing_date") or "").strip()
+        form_type = str(row.get("form_type") or "").strip()
+        total_percent = row.get("total_percent")
+        if not filing_date or not form_type or total_percent is None:
+            continue
+        lines.append(
+            f"- {filing_date} — {form_type} — reported ownership {_format_compact_percent(total_percent)}"
+        )
+    return "\n".join(lines) if len(lines) > 1 else None
 
 
 def _render_quarterly_trend_and_ttm_answer(
@@ -776,6 +1011,64 @@ def _render_quarterly_trend_and_ttm_answer(
         f"{revenue_text}.\n"
         f"Latest trailing-twelve-month free cash flow was {_format_money(ttm_fcf)}.\n"
         f"{margin_sentence}"
+    )
+
+
+def _render_growth_and_margin_trend_answer(
+    ticker: str | None,
+    growth_rows: list[dict[str, Any]],
+    ratio_rows: list[dict[str, Any]],
+) -> str | None:
+    """Render a grounded answer for annual growth-plus-margin trend prompts."""
+    ordered_growth_rows = sorted(
+        [row for row in growth_rows if row.get("revenue") is not None and _record_period_end(row)],
+        key=_record_period_end,
+    )[-4:]
+    ordered_ratio_rows = sorted(
+        [
+            row
+            for row in ratio_rows
+            if row.get("ratio_name") == "net_profit_margin"
+            and row.get("value") is not None
+            and _record_period_end(row)
+        ],
+        key=_record_period_end,
+    )[-4:]
+    if len(ordered_growth_rows) < 2 or len(ordered_ratio_rows) < 2:
+        return None
+
+    growth_lines = [
+        f"- {_record_period_end(row)}: {_format_percent(row['revenue'])}"
+        for row in ordered_growth_rows
+    ]
+    margin_lines = [
+        f"- {_record_period_end(row)}: {_format_percent(float(row['value']) * 100.0)}"
+        for row in ordered_ratio_rows
+    ]
+
+    growth_summary = (
+        f"Revenue growth moved from {_format_percent(ordered_growth_rows[0]['revenue'])} in {_record_period_end(ordered_growth_rows[0])} "
+        f"to {_format_percent(ordered_growth_rows[-1]['revenue'])} in {_record_period_end(ordered_growth_rows[-1])}, "
+        "with a contraction in between before re-accelerating."
+    )
+    margin_summary = (
+        f"Net profit margin moved from {_format_percent(float(ordered_ratio_rows[0]['value']) * 100.0)} in {_record_period_end(ordered_ratio_rows[0])} "
+        f"to {_format_percent(float(ordered_ratio_rows[-1]['value']) * 100.0)} in {_record_period_end(ordered_ratio_rows[-1])}, "
+        "dipping before recovering."
+    )
+    company_label = ticker or "The company"
+    return "\n".join(
+        [
+            f"{company_label}'s revenue growth over the last four annual periods was:",
+            *growth_lines,
+            "",
+            "Net profit margin over the same periods was:",
+            *margin_lines,
+            "",
+            "Direction of change:",
+            f"- {growth_summary}",
+            f"- {margin_summary}",
+        ]
     )
 
 
@@ -1047,6 +1340,53 @@ async def _try_direct_answer(request: ChatRequest) -> tuple[list[str], str] | No
         if answer:
             return (["analyzing 8-K events"], answer)
 
+    if ticker and "beneficial ownership" in lowered_message and "filings" in lowered_message:
+        requested_start_date = _extract_first_iso_date(request.message)
+        rows = await asyncio.to_thread(
+            analytics_get_beneficial_ownership,
+            ticker,
+            None,
+            5,
+            requested_start_date,
+            None,
+            True,
+            2_000,
+        )
+        answer = _render_beneficial_ownership_history_answer(ticker, requested_start_date, rows)
+        if answer:
+            return (["analyzing beneficial ownership filings"], answer)
+
+    if ticker and "8-k" in lowered_message and "item sections" in lowered_message:
+        filings = await asyncio.to_thread(analytics_get_filings_list, ticker, "8-K", 1)
+        if filings:
+            filing = filings[0]
+            sections = await asyncio.to_thread(
+                analytics_get_filing_sections,
+                ticker,
+                str(filing.get("accession_number") or ""),
+            )
+            answer = _render_latest_filing_sections_answer(filing, sections)
+            if answer:
+                return (["searching filings", "mapping filing sections"], answer)
+
+    if (
+        ticker
+        and "growth" in lowered_message
+        and "net profit margin" in lowered_message
+        and "last four annual" in lowered_message
+    ):
+        growth_df, ratio_df = await asyncio.gather(
+            asyncio.to_thread(analytics_growth_rates, ticker, ["revenue"], "annual"),
+            asyncio.to_thread(analytics_ratio_timeseries, ticker, ["net_profit_margin"], "annual"),
+        )
+        answer = _render_growth_and_margin_trend_answer(
+            ticker,
+            _dataframe_records_with_index(growth_df),
+            _dataframe_records_with_index(ratio_df),
+        )
+        if answer:
+            return (["retrieving financial time series", "computing ratio trends"], answer)
+
     if ticker and "8-k" in lowered_message and ("free cash flow" in lowered_message or "capex" in lowered_message):
         start_date = _extract_first_iso_date(request.message) or (
             date.today() - timedelta(days=365)
@@ -1076,18 +1416,111 @@ async def _try_direct_answer(request: ChatRequest) -> tuple[list[str], str] | No
         if answer:
             return (["analyzing quarterly financials", "computing trailing-twelve-month metrics"], answer)
 
+    if ticker and "10-k" in lowered_message and "section where the match appears" in lowered_message:
+        query = _extract_search_query(request.message)
+        if query:
+            filings = await asyncio.to_thread(analytics_get_filings_list, ticker, "10-K", 1)
+            if filings:
+                filing = filings[0]
+                matches = await asyncio.to_thread(
+                    analytics_search_filing_text,
+                    ticker,
+                    str(filing.get("accession_number") or ""),
+                    query,
+                    None,
+                    5,
+                    280,
+                )
+                answer = _render_latest_10k_search_answer(filing, query, matches)
+                if answer:
+                    return (["searching filings", "searching filing text"], answer)
+
     if ticker and "10-k" in lowered_message and "risk" in lowered_message:
         filings = await asyncio.to_thread(analytics_get_filings_list, ticker, "10-K", 1)
         if filings:
             filing = filings[0]
-            filing_text = await asyncio.to_thread(
-                analytics_get_filing_text,
+            accession_number = str(filing.get("accession_number") or "")
+            section = await asyncio.to_thread(
+                analytics_get_filing_section,
                 ticker,
-                str(filing.get("accession_number") or ""),
+                accession_number,
+                "risk factors",
             )
-            answer = _render_latest_10k_risk_answer(ticker, filing, filing_text)
+            section_text = "\n".join(
+                part
+                for part in [
+                    str(section.get("heading") or "").strip(),
+                    str(section.get("content") or "").strip(),
+                ]
+                if part
+            )
+            if not section_text:
+                section_text = await asyncio.to_thread(
+                    analytics_get_filing_text,
+                    ticker,
+                    accession_number,
+                )
+            answer = _render_latest_10k_risk_answer(ticker, filing, section_text)
             if answer:
                 return (["searching filings", "reading SEC filings"], answer)
+
+    if (
+        ticker
+        and "10-k" in lowered_message
+        and any(token in lowered_message for token in ["md&a", "management's discussion", "management discussion"])
+        and any(token in lowered_message for token in ["highlight", "highlights", "theme", "themes", "point", "points"])
+    ):
+        filings = await asyncio.to_thread(analytics_get_filings_list, ticker, "10-K", 1)
+        if filings:
+            filing = filings[0]
+            accession_number = str(filing.get("accession_number") or "")
+            section = await asyncio.to_thread(
+                analytics_get_filing_section,
+                ticker,
+                accession_number,
+                "mda",
+            )
+            section_text = "\n".join(
+                part
+                for part in [
+                    str(section.get("heading") or "").strip(),
+                    str(section.get("content") or "").strip(),
+                ]
+                if part
+            )
+            if not section_text:
+                section_text = _extract_mdna_excerpt(
+                    await asyncio.to_thread(
+                        analytics_get_filing_text,
+                        ticker,
+                        accession_number,
+                    )
+                )
+            answer = _render_latest_10k_mdna_answer(ticker, filing, section_text)
+            if answer:
+                return (["searching filings", "reading SEC filings"], answer)
+
+    if (
+        ticker
+        and "risk factor" in lowered_message
+        and "prior annual filing" in lowered_message
+        and "change" in lowered_message
+    ):
+        filings = await asyncio.to_thread(analytics_get_filings_list, ticker, "10-K", 1)
+        if filings:
+            filing = filings[0]
+            comparison = await asyncio.to_thread(
+                analytics_compare_filing_sections,
+                ticker,
+                str(filing.get("accession_number") or ""),
+                "risk factors",
+                None,
+                8,
+                360,
+            )
+            answer = _render_filing_section_comparison_answer(comparison)
+            if answer:
+                return (["searching filings", "comparing filing sections"], answer)
 
     if (
         "rank" in lowered_message

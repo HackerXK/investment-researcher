@@ -173,6 +173,174 @@ def unique_nonempty(values: Iterable[Any]) -> list[Any]:
     return result
 
 
+def extract_risk_theme_candidates(text: str, max_candidates: int | None = None) -> list[str]:
+    """Extract grounded risk-theme headings or bullets from Item 1A-like text."""
+    if not text:
+        return []
+
+    lines = [line.strip() for line in str(text).splitlines() if line.strip()]
+    headings: list[str] = []
+    bullet_candidates: list[str] = []
+    current_heading: str | None = None
+
+    for line in lines:
+        normalized = line.lstrip("#").strip()
+        if not normalized:
+            continue
+
+        lowered = normalized.lower().rstrip(":")
+        if lowered in {"item 1a. risk factors", "item 1a risk factors", "risk factors summary"}:
+            continue
+        if lowered.startswith("item 1b"):
+            break
+
+        if lowered.startswith("risks related to"):
+            heading = normalized.rstrip(":")
+            if heading not in headings:
+                headings.append(heading)
+            current_heading = heading
+            continue
+
+        if normalized.startswith(("•", "-")):
+            bullet = normalized.lstrip("•-").strip()
+            if not bullet:
+                continue
+            bullet_candidates.append(f"{current_heading}: {bullet}" if current_heading else bullet)
+
+    candidates = headings if len(headings) >= 2 else headings + bullet_candidates
+    deduped = unique_nonempty(candidates)
+    if max_candidates is not None:
+        return deduped[:max_candidates]
+    return deduped
+
+
+def extract_risk_highlight_candidates(
+    text: str,
+    max_candidates: int | None = None,
+    max_chars: int = 320,
+) -> list[str]:
+    """Extract grounded heading-prefixed risk statements from Item 1A-like text."""
+    if not text:
+        return []
+
+    lines = [line.strip() for line in str(text).splitlines() if line.strip()]
+    highlights: list[str] = []
+    current_heading: str | None = None
+    captured_for_current_heading = False
+
+    for line in lines:
+        normalized = line.lstrip("#").strip()
+        if not normalized:
+            continue
+
+        lowered = normalized.lower().rstrip(":")
+        if lowered in {"item 1a. risk factors", "item 1a risk factors", "risk factors summary"}:
+            continue
+        if lowered.startswith("item 1b"):
+            break
+
+        if lowered.startswith("risks related to"):
+            current_heading = normalized.rstrip(":")
+            captured_for_current_heading = False
+            continue
+
+        candidate: str | None = None
+        if normalized.startswith(("•", "-")):
+            bullet = normalized.lstrip("•-").strip()
+            if bullet and not (current_heading and captured_for_current_heading):
+                candidate = f"{current_heading}: {bullet}" if current_heading else bullet
+        elif current_heading and not captured_for_current_heading:
+            sentence = re.split(r"(?<=[.!?])\s+", normalized, maxsplit=1)[0].strip()
+            if sentence:
+                candidate = f"{current_heading}: {sentence}"
+
+        if not candidate:
+            continue
+
+        excerpt = text_excerpt(candidate, max_chars)
+        if excerpt:
+            highlights.append(excerpt)
+            if current_heading:
+                captured_for_current_heading = True
+
+    deduped = unique_nonempty(highlights)
+    if max_candidates is not None:
+        return deduped[:max_candidates]
+    return deduped
+
+
+def _looks_like_narrative_subheading(line: str) -> bool:
+    """Return whether a line looks like a markdown-style narrative subheading."""
+    normalized = line.lstrip("#").strip()
+    if not normalized or normalized.startswith(("•", "-")):
+        return False
+    if line.lstrip().startswith("#"):
+        return True
+    if len(normalized) > 120 or normalized.endswith("."):
+        return False
+    if normalized.endswith(":"):
+        return True
+    if re.fullmatch(r"[A-Z0-9][A-Z0-9 ,/&()'%-]{2,120}", normalized) and any(
+        character.isalpha() for character in normalized
+    ):
+        return True
+
+    words = re.findall(r"[A-Za-z][A-Za-z'&/-]*", normalized)
+    if not words or len(words) > 12:
+        return False
+    capitalized_words = sum(1 for word in words if word[0].isupper())
+    return capitalized_words / len(words) >= 0.8
+
+
+def extract_narrative_highlight_candidates(
+    text: str,
+    max_candidates: int | None = None,
+    max_chars: int = 320,
+) -> list[str]:
+    """Extract grounded heading-prefixed highlights from long narrative sections."""
+    if not text:
+        return []
+
+    lines = [line.rstrip() for line in str(text).splitlines() if line.strip()]
+    highlights: list[str] = []
+    current_heading: str | None = None
+    captured_for_current_heading = False
+
+    for line in lines:
+        normalized = line.lstrip("#").strip()
+        if not normalized:
+            continue
+
+        if _looks_like_narrative_subheading(line):
+            current_heading = normalized.rstrip(":")
+            captured_for_current_heading = False
+            continue
+
+        candidate: str | None = None
+        if normalized.startswith(("•", "-")):
+            bullet = normalized.lstrip("•-").strip()
+            if bullet and not (current_heading and captured_for_current_heading):
+                candidate = f"{current_heading}: {bullet}" if current_heading else bullet
+        elif current_heading and not captured_for_current_heading:
+            sentence = re.split(r"(?<=[.!?])\s+", normalized, maxsplit=1)[0].strip()
+            if sentence:
+                candidate = f"{current_heading}: {sentence}"
+
+        if not candidate:
+            continue
+
+        excerpt = text_excerpt(candidate, max_chars)
+        if excerpt:
+            highlights.append(excerpt)
+            if current_heading:
+                captured_for_current_heading = True
+
+    deduped = unique_nonempty(highlights)
+    if max_candidates is not None:
+        return deduped[:max_candidates]
+    return deduped
+
+
 def _normalize_section_key(value: Any) -> str | None:
     """Normalize a section selector or title into a compact lookup key."""
     if value is None:

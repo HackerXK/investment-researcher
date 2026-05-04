@@ -7,6 +7,7 @@ from fastapi.responses import Response
 
 import investment_researcher.analytics as analytics_module
 from investment_researcher.web import chat_eval
+from tests.fixtures.chat_eval_questions import get_chat_eval_question, get_chat_eval_questions
 
 
 def test_quarterly_margin_rows_supports_wide_rows():
@@ -257,7 +258,53 @@ def test_extract_filing_excerpt_prefers_actual_item_1a_section():
     assert excerpt.startswith("## Item 1A. Risk Factors")
     assert "Demand volatility" in excerpt
     assert "Forward-looking statements" not in excerpt
-    assert "## Item 1B. Unresolved Staff Comments" not in excerpt
+
+
+def test_compact_filing_section_includes_risk_theme_candidates():
+    compact = chat_eval._compact_filing_section(
+        {
+            "section_key": "item-1a",
+            "item_code": "1A",
+            "heading": "Item 1A. Risk Factors",
+            "content": """
+Risks Related to Our Business and Our Industry
+• Industry changes could pressure revenue.
+Risks Related to Demand, Supply, and Manufacturing
+• Supply constraints could delay product delivery.
+""",
+        }
+    )
+
+    assert compact["theme_candidates"] == [
+        "Risks Related to Our Business and Our Industry",
+        "Risks Related to Demand, Supply, and Manufacturing",
+    ]
+    assert compact["risk_highlights"] == [
+        "Risks Related to Our Business and Our Industry: Industry changes could pressure revenue.",
+        "Risks Related to Demand, Supply, and Manufacturing: Supply constraints could delay product delivery.",
+    ]
+
+
+def test_compact_filing_section_includes_mdna_highlights():
+    compact = chat_eval._compact_filing_section(
+        {
+            "section_key": "item-7",
+            "item_code": "7",
+            "heading": "Item 7. Management's Discussion and Analysis of Financial Condition and Results of Operations",
+            "content": """
+### Executive Overview
+Revenue growth was driven by Services and iPhone demand.
+
+### Liquidity and Capital Resources
+The company maintained strong liquidity while returning capital to shareholders.
+""",
+        }
+    )
+
+    assert compact["section_highlights"] == [
+        "Executive Overview: Revenue growth was driven by Services and iPhone demand.",
+        "Liquidity and Capital Resources: The company maintained strong liquidity while returning capital to shareholders.",
+    ]
 
 
 def test_build_evidence_bundle_uses_full_insider_proxy_summary(monkeypatch):
@@ -299,6 +346,405 @@ def test_build_evidence_bundle_uses_full_insider_proxy_summary(monkeypatch):
     assert evidence.kind == "insider_and_proxy"
     assert evidence.payload["insider_sells"][0]["insider_name"] == "Susan J Li"
     assert evidence.payload["proxy_rows"][0]["accession_number"] == "0001628280-26-025532"
+
+
+def test_build_evidence_bundle_summarizes_beneficial_ownership(monkeypatch):
+    monkeypatch.setattr(
+        analytics_module,
+        "summarize_beneficial_ownership",
+        lambda **kwargs: {
+            "issuer_name": "Palantir Technologies Inc.",
+            "latest_form_type": "SC 13G/A",
+            "latest_total_percent": 6.3,
+            "latest_reporting_person_names": ["Passive Manager LLC"],
+            "latest_is_passive_investor": True,
+        },
+    )
+
+    question = SimpleNamespace(
+        evidence_kind="beneficial_ownership_summary",
+        evidence_params={"ticker": "PLTR", "limit": 10},
+    )
+
+    evidence = chat_eval.build_evidence_bundle(question)
+
+    assert evidence.kind == "beneficial_ownership_summary"
+    assert evidence.payload["issuer_name"] == "Palantir Technologies Inc."
+    assert evidence.payload["latest_form_type"] == "SC 13G/A"
+    assert evidence.payload["latest_total_percent"] == 6.3
+    assert evidence.payload["latest_is_passive_investor"] is True
+
+
+def test_build_evidence_bundle_compacts_beneficial_ownership_rows(monkeypatch):
+    monkeypatch.setattr(
+        analytics_module,
+        "get_beneficial_ownership",
+        lambda **kwargs: [
+            {
+                "accession_number": "0001321655-26-000001",
+                "form_type": "SC 13D",
+                "filing_date": "2026-03-15",
+                "event_date": "2026-03-10",
+                "issuer_name": "Paramount Global",
+                "total_shares": 12_000_000,
+                "total_percent": 6.1,
+                "reporting_person_names": ["Example Capital"],
+                "is_amendment": False,
+                "rule_designation": None,
+                "is_passive_investor": False,
+                "purpose_of_transaction": "Potential strategic engagement.",
+                "ignored_field": "ignored",
+            }
+        ],
+    )
+
+    question = SimpleNamespace(
+        evidence_kind="beneficial_ownership_rows",
+        evidence_params={"ticker": "PARA", "start_date": "2025-01-01", "limit": 3},
+    )
+
+    evidence = chat_eval.build_evidence_bundle(question)
+
+    assert evidence.kind == "beneficial_ownership_rows"
+    assert evidence.payload == [
+        {
+            "accession_number": "0001321655-26-000001",
+            "form_type": "SC 13D",
+            "filing_date": "2026-03-15",
+            "event_date": "2026-03-10",
+            "issuer_name": "Paramount Global",
+            "total_shares": 12_000_000,
+            "total_percent": 6.1,
+            "reporting_person_names": ["Example Capital"],
+            "is_amendment": False,
+            "rule_designation": None,
+            "is_passive_investor": False,
+            "purpose_of_transaction": "Potential strategic engagement.",
+        }
+    ]
+
+
+def test_build_evidence_bundle_lists_latest_filing_sections(monkeypatch):
+    seen_get_filings_list: list[tuple[object, ...]] = []
+
+    def fake_get_filings_list(
+        ticker,
+        form_type=None,
+        limit=None,
+        start_date=None,
+        end_date=None,
+        include_amendments=None,
+    ):
+        seen_get_filings_list.append(
+            (ticker, form_type, limit, start_date, end_date, include_amendments)
+        )
+        return [
+            {
+                "accession_number": "0000104169-26-000001",
+                "form_type": "8-K",
+                "filing_date": "2026-04-10",
+                "description": "Current report",
+            }
+        ]
+
+    monkeypatch.setattr(analytics_module, "get_filings_list", fake_get_filings_list)
+    monkeypatch.setattr(
+        analytics_module,
+        "get_filing_sections",
+        lambda ticker, accession_number: [
+            {
+                "section_key": "item-5-02",
+                "item_code": "5.02",
+                "heading": "Item 5.02 Departure of Directors or Certain Officers",
+                "content": "ignored",
+            },
+            {
+                "section_key": "item-9-01",
+                "item_code": "9.01",
+                "heading": "Item 9.01 Financial Statements and Exhibits",
+                "content": "ignored",
+            },
+        ],
+    )
+
+    question = SimpleNamespace(
+        evidence_kind="latest_filing_sections",
+        evidence_params={"ticker": "WMT", "form_type": "8-K", "limit": 1},
+    )
+
+    evidence = chat_eval.build_evidence_bundle(question)
+
+    assert seen_get_filings_list == [("WMT", "8-K", 1, None, None, False)]
+    assert evidence.payload == {
+        "filing": {
+            "accession_number": "0000104169-26-000001",
+            "form_type": "8-K",
+            "filing_date": "2026-04-10",
+            "description": "Current report",
+        },
+        "sections": [
+            {
+                "section_key": "item-5-02",
+                "item_code": "5.02",
+                "heading": "Item 5.02 Departure of Directors or Certain Officers",
+            },
+            {
+                "section_key": "item-9-01",
+                "item_code": "9.01",
+                "heading": "Item 9.01 Financial Statements and Exhibits",
+            },
+        ],
+    }
+
+
+def test_build_evidence_bundle_reads_and_searches_latest_filing(monkeypatch):
+    monkeypatch.setattr(
+        analytics_module,
+        "get_filings_list",
+        lambda *args, **kwargs: [
+            {
+                "accession_number": "0000731766-26-000001",
+                "form_type": "10-K",
+                "filing_date": "2026-07-25",
+                "description": "Annual report",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        analytics_module,
+        "get_filing_section",
+        lambda ticker, accession_number, section_name: {
+            "section_key": "item-1a",
+            "item_code": "1A",
+            "heading": "Item 1A. Risk Factors",
+            "content": "A" * 30_000,
+        },
+    )
+    monkeypatch.setattr(
+        analytics_module,
+        "search_filing_text",
+        lambda ticker, accession_number, query, section_name=None, max_matches=5, context_chars=280: [
+            {
+                "item_code": "1A",
+                "heading": "Item 1A. Risk Factors",
+                "line_number": 120,
+                "excerpt": "China demand softness may affect results.",
+                "ignored_field": "ignored",
+            }
+        ],
+    )
+
+    section_question = SimpleNamespace(
+        evidence_kind="latest_filing_section",
+        evidence_params={
+            "ticker": "UNH",
+            "form_type": "10-K",
+            "limit": 1,
+            "section_name": "risk factors",
+        },
+    )
+    search_question = SimpleNamespace(
+        evidence_kind="latest_filing_search",
+        evidence_params={
+            "ticker": "NKE",
+            "form_type": "10-K",
+            "limit": 1,
+            "query": "China",
+            "max_matches": 3,
+        },
+    )
+
+    section_evidence = chat_eval.build_evidence_bundle(section_question)
+    search_evidence = chat_eval.build_evidence_bundle(search_question)
+
+    assert section_evidence.payload["section_name"] == "risk factors"
+    assert section_evidence.payload["section"]["item_code"] == "1A"
+    assert len(section_evidence.payload["section"]["content"]) == 30_000
+    assert search_evidence.payload == {
+        "filing": {
+            "accession_number": "0000731766-26-000001",
+            "form_type": "10-K",
+            "filing_date": "2026-07-25",
+            "description": "Annual report",
+        },
+        "query": "China",
+        "matches": [
+            {
+                "item_code": "1A",
+                "heading": "Item 1A. Risk Factors",
+                "line_number": 120,
+                "excerpt": "China demand softness may affect results.",
+            }
+        ],
+    }
+
+
+def test_build_evidence_bundle_keeps_large_risk_section_in_summary(monkeypatch):
+    monkeypatch.setattr(
+        analytics_module,
+        "get_filings_list",
+        lambda *args, **kwargs: [
+            {
+                "accession_number": "0000731766-26-000001",
+                "form_type": "10-K",
+                "filing_date": "2026-07-25",
+                "description": "Annual report",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        analytics_module,
+        "get_filing_section",
+        lambda ticker, accession_number, section_name: {
+            "section_key": "item-1a",
+            "item_code": "1A",
+            "heading": "Item 1A. Risk Factors",
+            "content": "A" * 80_000 + "TAIL-MARKER",
+        },
+    )
+
+    question = SimpleNamespace(
+        evidence_kind="latest_filing_section",
+        evidence_params={
+            "ticker": "UNH",
+            "form_type": "10-K",
+            "limit": 1,
+            "section_name": "risk factors",
+        },
+    )
+
+    evidence = chat_eval.build_evidence_bundle(question)
+
+    assert "TAIL-MARKER" in evidence.summary
+    assert "... [truncated]" not in evidence.summary
+
+
+def test_build_evidence_bundle_keeps_large_mdna_section_in_summary(monkeypatch):
+    monkeypatch.setattr(
+        analytics_module,
+        "get_filings_list",
+        lambda *args, **kwargs: [
+            {
+                "accession_number": "0000320193-25-000073",
+                "form_type": "10-K",
+                "filing_date": "2025-11-01",
+                "description": "Annual report",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        analytics_module,
+        "get_filing_section",
+        lambda ticker, accession_number, section_name: {
+            "section_key": "item-7",
+            "item_code": "7",
+            "heading": "Item 7. Management's Discussion and Analysis of Financial Condition and Results of Operations",
+            "content": "B" * 80_000 + "TAIL-MARKER",
+        },
+    )
+
+    question = SimpleNamespace(
+        evidence_kind="latest_filing_section",
+        evidence_params={
+            "ticker": "AAPL",
+            "form_type": "10-K",
+            "limit": 1,
+            "section_name": "mda",
+        },
+    )
+
+    evidence = chat_eval.build_evidence_bundle(question)
+
+    assert "TAIL-MARKER" in evidence.summary
+    assert "... [truncated]" not in evidence.summary
+
+
+def test_build_evidence_bundle_compares_latest_filing_section(monkeypatch):
+    seen_kwargs: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        analytics_module,
+        "get_filings_list",
+        lambda *args, **kwargs: [
+            {
+                "accession_number": "0001090727-26-000001",
+                "form_type": "10-K",
+                "filing_date": "2026-02-20",
+                "description": "Annual report",
+            }
+        ],
+    )
+
+    def fake_compare_filing_sections(**kwargs):
+        seen_kwargs.update(kwargs)
+        return {
+            "ticker": "UPS",
+            "requested_section": "risk factors",
+            "previous_selection_mode": "latest_prior_same_form",
+            "current_filing": {"accession_number": "0001090727-26-000001"},
+            "previous_filing": {"accession_number": "0001090727-25-000010"},
+            "current_only_excerpts": ["Labor disruption risk increased."],
+            "previous_only_excerpts": ["Fuel cost volatility remained elevated."],
+        }
+
+    monkeypatch.setattr(analytics_module, "compare_filing_sections", fake_compare_filing_sections)
+
+    question = SimpleNamespace(
+        evidence_kind="latest_filing_section_comparison",
+        evidence_params={
+            "ticker": "UPS",
+            "form_type": "10-K",
+            "section_name": "risk factors",
+            "max_changes": 2,
+        },
+    )
+
+    evidence = chat_eval.build_evidence_bundle(question)
+
+    assert seen_kwargs == {
+        "ticker": "UPS",
+        "current_accession_number": "0001090727-26-000001",
+        "section_name": "risk factors",
+        "previous_accession_number": None,
+        "max_changes": 2,
+        "excerpt_chars": 280,
+    }
+    assert evidence.payload["previous_selection_mode"] == "latest_prior_same_form"
+    assert evidence.payload["previous_filing"]["accession_number"] == "0001090727-25-000010"
+
+
+def test_chat_eval_question_corpus_includes_recent_sec_tool_questions():
+    questions = {question.question_id: question for question in get_chat_eval_questions()}
+
+    expected_tools = {
+        "pltr-latest-beneficial-ownership-snapshot": ("summarize_beneficial_ownership",),
+        "para-recent-beneficial-ownership-filings": ("get_beneficial_ownership",),
+        "wmt-latest-8k-section-list": ("list_filings", "list_filing_sections"),
+        "unh-latest-10k-risk-section": (
+            "list_filings",
+            "list_filing_sections",
+            "read_filing_section",
+        ),
+        "aapl-latest-10k-mdna-highlights": (
+            "list_filings",
+            "list_filing_sections",
+            "read_filing_section",
+        ),
+        "nke-latest-10k-china-search": ("list_filings", "search_filing_text"),
+        "ups-risk-factors-change": ("list_filings", "compare_filing_sections"),
+    }
+
+    for question_id, tools in expected_tools.items():
+        assert get_chat_eval_question(question_id) == questions[question_id]
+        assert questions[question_id].expected_tools == tools
+
+    assert {question.difficulty for question in questions.values()} >= {"simple", "medium", "complex"}
+    assert [question.question_id for question in get_chat_eval_questions(smoke_only=True)] == [
+        "aapl-ttm-revenue-net-income",
+        "nvda-latest-annual-ratios",
+        "xom-annual-cash-flow-summary",
+        "aapl-nvda-xom-fcf-ranking",
+    ]
 
 
 @pytest.mark.asyncio

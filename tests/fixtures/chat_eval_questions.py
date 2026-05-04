@@ -140,6 +140,124 @@ CHAT_EVAL_QUESTIONS: tuple[ChatEvalQuestion, ...] = (
         notes="13F concentration question; keep out of smoke mode because availability depends on local cache.",
     ),
     ChatEvalQuestion(
+        question_id="pltr-latest-beneficial-ownership-snapshot",
+        title="PLTR latest beneficial ownership snapshot",
+        ticker="PLTR",
+        prompt=(
+            "What does Palantir's latest beneficial ownership filing say about the filer, "
+            "the reported ownership percentage, and whether the position is passive or activist?"
+        ),
+        difficulty="simple",
+        expected_tools=("summarize_beneficial_ownership",),
+        evidence_kind="beneficial_ownership_summary",
+        evidence_params={"ticker": "PLTR", "limit": 10},
+        must_cover=("filer", "ownership percentage", "passive or activist"),
+        notes="Single-tool Schedule 13D/13G summary for a large but non-megacap software company.",
+    ),
+    ChatEvalQuestion(
+        question_id="para-recent-beneficial-ownership-filings",
+        title="WBD recent beneficial ownership filings",
+        ticker="WBD",
+        prompt=(
+            "Since 2025-01-01, what recent beneficial ownership filings has Warner Bros. Discovery had? "
+            "List the form type, filing date, and reported ownership percentage for the recent filings."
+        ),
+        difficulty="medium",
+        expected_tools=("get_beneficial_ownership",),
+        evidence_kind="beneficial_ownership_rows",
+        evidence_params={
+            "ticker": "WBD",
+            "start_date": "2025-01-01",
+            "limit": 5,
+        },
+        must_cover=("form type", "filing date", "ownership percentage"),
+        notes="Longer-range Schedule 13D/13G history for a media company with the current WBD ticker.",
+    ),
+    ChatEvalQuestion(
+        question_id="wmt-latest-8k-section-list",
+        title="WMT latest 8-K section list",
+        ticker="WMT",
+        prompt=(
+            "What item sections are included in Walmart's latest 8-K? Give the accession number "
+            "and list the item codes with their headings."
+        ),
+        difficulty="medium",
+        expected_tools=("list_filings", "list_filing_sections"),
+        evidence_kind="latest_filing_sections",
+        evidence_params={
+            "ticker": "WMT",
+            "form_type": "8-K",
+            "limit": 1,
+            "include_amendments": False,
+        },
+        must_cover=("accession number", "item codes", "headings"),
+        notes="Section-discovery question for a recent retail 8-K.",
+    ),
+    ChatEvalQuestion(
+        question_id="unh-latest-10k-risk-section",
+        title="UNH latest 10-K risk section",
+        ticker="UNH",
+        prompt=(
+            "In UnitedHealth's latest 10-K Item 1A, what are two risk themes management highlights? "
+            "Cite the accession number."
+        ),
+        difficulty="medium",
+        expected_tools=("list_filings", "list_filing_sections", "read_filing_section"),
+        evidence_kind="latest_filing_section",
+        evidence_params={
+            "ticker": "UNH",
+            "form_type": "10-K",
+            "limit": 1,
+            "section_name": "risk factors",
+            "include_amendments": False,
+        },
+        must_cover=("two risk themes", "accession number"),
+        notes="Targeted Item 1A section-read question for a healthcare megacap.",
+    ),
+    ChatEvalQuestion(
+        question_id="aapl-latest-10k-mdna-highlights",
+        title="AAPL latest 10-K MD&A highlights",
+        ticker="AAPL",
+        prompt=(
+            "In Apple's latest 10-K MD&A, what are two management highlights? "
+            "Cite the accession number."
+        ),
+        difficulty="medium",
+        expected_tools=("list_filings", "list_filing_sections", "read_filing_section"),
+        evidence_kind="latest_filing_section",
+        evidence_params={
+            "ticker": "AAPL",
+            "form_type": "10-K",
+            "limit": 1,
+            "section_name": "mda",
+            "include_amendments": False,
+        },
+        must_cover=("two highlights", "accession number"),
+        notes="Targeted MD&A section-read question for a large-cap hardware and services company.",
+    ),
+    ChatEvalQuestion(
+        question_id="nke-latest-10k-china-search",
+        title="NKE latest 10-K China search",
+        ticker="NKE",
+        prompt=(
+            "In Nike's latest 10-K, what does management mention about China? "
+            "Cite the accession number and the section where the match appears."
+        ),
+        difficulty="medium",
+        expected_tools=("list_filings", "search_filing_text"),
+        evidence_kind="latest_filing_search",
+        evidence_params={
+            "ticker": "NKE",
+            "form_type": "10-K",
+            "limit": 1,
+            "query": "China",
+            "max_matches": 5,
+            "include_amendments": False,
+        },
+        must_cover=("China", "accession number", "section"),
+        notes="Search-oriented filing question for a global consumer brand.",
+    ),
+    ChatEvalQuestion(
         question_id="aapl-growth-and-margin-trend",
         title="AAPL growth and margin trend",
         ticker="AAPL",
@@ -251,6 +369,28 @@ CHAT_EVAL_QUESTIONS: tuple[ChatEvalQuestion, ...] = (
         },
         must_cover=("8-K", "free cash flow", "capex"),
         notes="Structured events plus financial-statement synthesis.",
+    ),
+    ChatEvalQuestion(
+        question_id="ups-risk-factors-change",
+        title="UPS risk factors change",
+        ticker="UPS",
+        prompt=(
+            "How did UPS's latest annual risk factor section change versus the prior annual filing? "
+            "Identify one new emphasis and cite both accession numbers."
+        ),
+        difficulty="complex",
+        expected_tools=("list_filings", "compare_filing_sections"),
+        evidence_kind="latest_filing_section_comparison",
+        evidence_params={
+            "ticker": "UPS",
+            "form_type": "10-K",
+            "limit": 1,
+            "section_name": "risk factors",
+            "max_changes": 3,
+            "include_amendments": False,
+        },
+        must_cover=("new emphasis", "both accession numbers"),
+        notes="Year-over-year risk-factor comparison for an industrial/logistics company.",
     ),
     ChatEvalQuestion(
         question_id="aapl-nvda-xom-fcf-ranking",

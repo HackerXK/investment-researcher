@@ -735,6 +735,67 @@ None.
     assert "## Item 1A. Risk Factors" in section["content"]
 
 
+def test_get_filing_sections_falls_back_to_8k_report_items(monkeypatch):
+    class FakeCurrentReport:
+        items = ["Item 8.01", "Item 9.01"]
+        content_type = "other_events"
+        date_of_report = "2026-04-30"
+        press_releases = []
+
+        def __getitem__(self, item_name: str) -> str:
+            mapping = {
+                "Item 8.01": "The company announced a financing update.",
+                "8.01": "The company announced a financing update.",
+                "Item 9.01": "Exhibits were attached to the filing.",
+                "9.01": "Exhibits were attached to the filing.",
+            }
+            return mapping[item_name]
+
+    filing = SimpleNamespace(
+        accession_no="0001193125-26-194086",
+        form="8-K",
+        filing_date="2026-04-30",
+        markdown=lambda: "",
+        obj=lambda: FakeCurrentReport(),
+    )
+
+    class FakeCompany:
+        def __init__(self, ticker: str):
+            assert ticker == "WMT"
+
+        def get_filings(self):
+            return [filing]
+
+    monkeypatch.setitem(sys.modules, "edgar", SimpleNamespace(Company=FakeCompany))
+
+    sections = analytics.get_filing_sections("WMT", "0001193125-26-194086")
+
+    assert sections == [
+        {
+            "accession_number": "0001193125-26-194086",
+            "form_type": "8-K",
+            "filing_date": "2026-04-30",
+            "item_code": "8.01",
+            "heading": "Item 8.01. Other Events",
+            "title": "Other Events",
+            "line_number": None,
+            "text_length": len("The company announced a financing update."),
+            "preview": "The company announced a financing update.",
+        },
+        {
+            "accession_number": "0001193125-26-194086",
+            "form_type": "8-K",
+            "filing_date": "2026-04-30",
+            "item_code": "9.01",
+            "heading": "Item 9.01. Financial Statements and Exhibits",
+            "title": "Financial Statements and Exhibits",
+            "line_number": None,
+            "text_length": len("Exhibits were attached to the filing."),
+            "preview": "Exhibits were attached to the filing.",
+        },
+    ]
+
+
 def test_search_filing_text_avoids_toc_hits(monkeypatch):
     filing_text = """# NVIDIA CORPORATION
 

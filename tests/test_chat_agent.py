@@ -1486,18 +1486,20 @@ async def test_try_direct_answer_handles_nvda_latest_10k_risk_themes(monkeypatch
     )
     monkeypatch.setattr(
         chat_module,
-        "analytics_get_filing_text",
-        lambda *args, **kwargs: """
-## Item 1A. Risk Factors
+        "analytics_get_filing_section",
+        lambda *args, **kwargs: {
+            "heading": "Item 1A. Risk Factors",
+            "content": """
 #### Risk Factors Summary
-#### Risks Related to Our Industry and Markets
-• Failure to meet the evolving needs of our industry and markets may adversely impact our financial results.
-• Competition could adversely impact our market share and financial results.
+Risks Related to Our Industry and Markets
+- Failure to meet the evolving needs of our industry and markets may adversely impact our financial results.
+- Competition could adversely impact our market share and financial results.
 Risks Related to Demand, Supply, and Manufacturing
-• Long manufacturing lead times and uncertain supply and capacity availability, combined with a failure to estimate customer demand accurately has led and could lead to mismatches between supply and demand.
-• Dependency on third-party suppliers and their technology to manufacture, assemble, test, or package our products reduces our control over product quantity and quality.
+- Long manufacturing lead times and uncertain supply and capacity availability, combined with a failure to estimate customer demand accurately has led and could lead to mismatches between supply and demand.
+- Dependency on third-party suppliers and their technology to manufacture, assemble, test, or package our products reduces our control over product quantity and quality.
 ## Item 1B. Unresolved Staff Comments
 """,
+        },
     )
 
     result = await chat_module._try_direct_answer(
@@ -1512,7 +1514,275 @@ Risks Related to Demand, Supply, and Manufacturing
     assert progress_messages == ["searching filings", "reading SEC filings"]
     assert "accession number 0001045810-26-000021" in answer
     assert "Risks Related to Our Industry and Markets" in answer
+    assert "Failure to meet the evolving needs of our industry and markets" in answer
     assert "Risks Related to Demand, Supply, and Manufacturing" in answer
+    assert "Long manufacturing lead times and uncertain supply and capacity availability" in answer
+
+
+@pytest.mark.asyncio
+async def test_try_direct_answer_handles_latest_10k_mdna_highlights(monkeypatch):
+    monkeypatch.setattr(
+        chat_module,
+        "analytics_get_filings_list",
+        lambda *args, **kwargs: [
+            {
+                "accession_number": "0000320193-25-000073",
+                "filing_date": "2025-11-01",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        chat_module,
+        "analytics_get_filing_section",
+        lambda *args, **kwargs: {
+            "heading": "Item 7. Management's Discussion and Analysis of Financial Condition and Results of Operations",
+            "content": """
+### Executive Overview
+Net sales grew due to Services strength and improved iPhone demand.
+
+### Liquidity and Capital Resources
+The company returned substantial capital to shareholders while maintaining a strong net cash position.
+""",
+        },
+    )
+
+    result = await chat_module._try_direct_answer(
+        ChatRequest(
+            message="In Apple's latest 10-K MD&A, what are two management highlights? Cite the accession number.",
+            ticker="AAPL",
+        )
+    )
+
+    assert result is not None
+    progress_messages, answer = result
+    assert progress_messages == ["searching filings", "reading SEC filings"]
+    assert "accession number 0000320193-25-000073" in answer
+    assert "Executive Overview" in answer
+    assert "Net sales grew due to Services strength and improved iPhone demand." in answer
+    assert "Liquidity and Capital Resources" in answer
+    assert "returned substantial capital to shareholders" in answer
+
+
+@pytest.mark.asyncio
+async def test_try_direct_answer_handles_recent_beneficial_ownership_filings(monkeypatch):
+    monkeypatch.setattr(
+        chat_module,
+        "analytics_get_beneficial_ownership",
+        lambda *args, **kwargs: [
+            {
+                "filing_date": "2026-04-30",
+                "form_type": "SCHEDULE 13G",
+                "issuer_name": "Warner Bros Discovery Inc",
+                "total_percent": 7.22,
+            },
+            {
+                "filing_date": "2026-03-27",
+                "form_type": "SCHEDULE 13G/A",
+                "issuer_name": "Warner Bros Discovery Inc",
+                "total_percent": 0,
+            },
+            {
+                "filing_date": "2025-12-17",
+                "form_type": "SCHEDULE 13D/A",
+                "issuer_name": "Anghami Inc",
+                "total_percent": 71.3,
+            },
+        ],
+    )
+
+    result = await chat_module._try_direct_answer(
+        ChatRequest(
+            message=(
+                "Since 2025-01-01, what recent beneficial ownership filings has Warner Bros. Discovery had? "
+                "List the form type, filing date, and reported ownership percentage for the recent filings."
+            ),
+            ticker="WBD",
+        )
+    )
+
+    assert result is not None
+    progress_messages, answer = result
+    assert progress_messages == ["analyzing beneficial ownership filings"]
+    assert "2026-04-30 — SCHEDULE 13G — reported ownership 7.22%" in answer
+    assert "2026-03-27 — SCHEDULE 13G/A — reported ownership 0%" in answer
+    assert "Anghami" not in answer
+
+
+@pytest.mark.asyncio
+async def test_try_direct_answer_handles_latest_8k_section_list_with_empty_sections(monkeypatch):
+    monkeypatch.setattr(
+        chat_module,
+        "analytics_get_filings_list",
+        lambda *args, **kwargs: [
+            {
+                "accession_number": "0001193125-26-194086",
+                "filing_date": "2026-04-30",
+            }
+        ],
+    )
+    monkeypatch.setattr(chat_module, "analytics_get_filing_sections", lambda *args, **kwargs: [])
+
+    result = await chat_module._try_direct_answer(
+        ChatRequest(
+            message=(
+                "What item sections are included in Walmart's latest 8-K? "
+                "Give the accession number and list the item codes with their headings."
+            ),
+            ticker="WMT",
+        )
+    )
+
+    assert result is not None
+    progress_messages, answer = result
+    assert progress_messages == ["searching filings", "mapping filing sections"]
+    assert "accession number 0001193125-26-194086" in answer
+    assert "did not retrieve any parsed item sections" in answer
+
+
+@pytest.mark.asyncio
+async def test_try_direct_answer_handles_growth_and_margin_trend(monkeypatch):
+    monkeypatch.setattr(
+        chat_module,
+        "analytics_growth_rates",
+        lambda *args, **kwargs: pd.DataFrame(
+            [
+                {"period_end": "2025-09-27", "revenue": 6.425511782832749},
+                {"period_end": "2024-09-28", "revenue": 2.021994077514111},
+                {"period_end": "2023-09-30", "revenue": -2.800460530319937},
+                {"period_end": "2022-09-24", "revenue": 7.79378760418461},
+            ]
+        ).set_index("period_end"),
+    )
+    monkeypatch.setattr(
+        chat_module,
+        "analytics_ratio_timeseries",
+        lambda *args, **kwargs: pd.DataFrame(
+            [
+                {"period_end": "2025-09-27", "ratio_name": "net_profit_margin", "value": 0.2691506412181824},
+                {"period_end": "2024-09-28", "ratio_name": "net_profit_margin", "value": 0.23971255769943867},
+                {"period_end": "2023-09-30", "ratio_name": "net_profit_margin", "value": 0.2530623426432028},
+                {"period_end": "2022-09-24", "ratio_name": "net_profit_margin", "value": 0.2530964070519973},
+            ]
+        ),
+    )
+
+    result = await chat_module._try_direct_answer(
+        ChatRequest(
+            message=(
+                "How have Apple's revenue growth and net profit margin changed over the last four annual periods? "
+                "Give the direction and the numbers."
+            ),
+            ticker="AAPL",
+        )
+    )
+
+    assert result is not None
+    progress_messages, answer = result
+    assert progress_messages == ["retrieving financial time series", "computing ratio trends"]
+    assert "2022-09-24: 7.79%" in answer
+    assert "2025-09-27: 6.43%" in answer
+    assert "2024-09-28: 23.97%" in answer
+    assert "$394.33B" not in answer
+
+
+@pytest.mark.asyncio
+async def test_try_direct_answer_handles_latest_10k_search_prompt(monkeypatch):
+    monkeypatch.setattr(
+        chat_module,
+        "analytics_get_filings_list",
+        lambda *args, **kwargs: [
+            {
+                "accession_number": "0000320187-25-000047",
+                "filing_date": "2025-07-17",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        chat_module,
+        "analytics_search_filing_text",
+        lambda *args, **kwargs: [
+            {
+                "item_code": "1",
+                "heading": "Item 1. Business",
+                "excerpt": "Greater China is listed as a reportable operating segment.",
+            },
+            {
+                "item_code": "1",
+                "heading": "Item 1. Business",
+                "excerpt": "For fiscal 2025, factories in China manufactured approximately 17% of total NIKE Brand footwear and 15% of total NIKE Brand apparel.",
+            },
+            {
+                "item_code": "7",
+                "heading": "Item 7. Management's Discussion and Analysis",
+                "excerpt": "Greater China revenues were $6,586 million in fiscal 2025, a 13% reported decrease and a 12% currency-neutral decrease from fiscal 2024.",
+            },
+        ],
+    )
+
+    result = await chat_module._try_direct_answer(
+        ChatRequest(
+            message=(
+                "In Nike's latest 10-K, what does management mention about China? "
+                "Cite the accession number and the section where the match appears."
+            ),
+            ticker="NKE",
+        )
+    )
+
+    assert result is not None
+    progress_messages, answer = result
+    assert progress_messages == ["searching filings", "searching filing text"]
+    assert "accession number 0000320187-25-000047" in answer
+    assert 'Retrieved matches for "China" appear in:' in answer
+    assert "Item 1. Business" in answer
+    assert "17% of total NIKE Brand footwear" in answer
+    assert "Item 7. Management's Discussion and Analysis" in answer
+    assert "6,586 million in fiscal 2025" in answer
+    assert "Item 1A" not in answer
+    assert "Shanghai" not in answer
+
+
+@pytest.mark.asyncio
+async def test_try_direct_answer_handles_risk_factor_section_comparison(monkeypatch):
+    monkeypatch.setattr(
+        chat_module,
+        "analytics_get_filings_list",
+        lambda *args, **kwargs: [
+            {
+                "accession_number": "0001628280-26-008432",
+                "filing_date": "2026-02-17",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        chat_module,
+        "analytics_compare_filing_sections",
+        lambda *args, **kwargs: {
+            "current_filing": {"accession_number": "0001628280-26-008432"},
+            "previous_filing": {"accession_number": "0001090727-25-000019"},
+            "current_only_excerpts": [
+                "Changes or continued uncertainty in general economic conditions may adversely affect us."
+            ],
+        },
+    )
+
+    result = await chat_module._try_direct_answer(
+        ChatRequest(
+            message=(
+                "How did UPS's latest annual risk factor section change versus the prior annual filing? "
+                "Identify one new emphasis and cite both accession numbers."
+            ),
+            ticker="UPS",
+        )
+    )
+
+    assert result is not None
+    progress_messages, answer = result
+    assert progress_messages == ["searching filings", "comparing filing sections"]
+    assert "0001628280-26-008432" in answer
+    assert "0001090727-25-000019" in answer
+    assert "continued uncertainty in general economic conditions" in answer
+    assert "Paris Climate" not in answer
 
 
 @pytest.mark.asyncio

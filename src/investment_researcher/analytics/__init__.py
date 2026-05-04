@@ -9,6 +9,7 @@ access via edgartools.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 import duckdb
@@ -56,6 +57,80 @@ from investment_researcher.analytics.sec_filings import (
 )
 
 log = logging.getLogger(__name__)
+
+_STANDARD_8K_ITEM_TITLES = {
+    "1.01": "Entry into a Material Definitive Agreement",
+    "1.02": "Termination of a Material Definitive Agreement",
+    "1.03": "Bankruptcy or Receivership",
+    "1.04": "Mine Safety - Reporting of Shutdowns and Patterns of Violations",
+    "2.01": "Completion of Acquisition or Disposition of Assets",
+    "2.02": "Results of Operations and Financial Condition",
+    "2.03": "Creation of a Direct Financial Obligation or an Obligation under an Off-Balance Sheet Arrangement of a Registrant",
+    "2.04": "Triggering Events That Accelerate or Increase a Direct Financial Obligation or an Obligation under an Off-Balance Sheet Arrangement",
+    "2.05": "Costs Associated with Exit or Disposal Activities",
+    "2.06": "Material Impairments",
+    "3.01": "Notice of Delisting or Failure to Satisfy a Continued Listing Rule or Standard; Transfer of Listing",
+    "3.02": "Unregistered Sales of Equity Securities",
+    "3.03": "Material Modification to Rights of Security Holders",
+    "4.01": "Changes in Registrant's Certifying Accountant",
+    "4.02": "Non-Reliance on Previously Issued Financial Statements or a Related Audit Report or Completed Interim Review",
+    "5.01": "Changes in Control of Registrant",
+    "5.02": "Departure of Directors or Certain Officers; Election of Directors; Appointment of Certain Officers; Compensatory Arrangements of Certain Officers",
+    "5.03": "Amendments to Articles of Incorporation or Bylaws; Change in Fiscal Year",
+    "5.04": "Temporary Suspension of Trading Under Registrant's Employee Benefit Plans",
+    "5.05": "Amendments to the Registrant's Code of Ethics, or Waiver of a Provision of the Code of Ethics",
+    "5.06": "Change in Shell Company Status",
+    "5.07": "Submission of Matters to a Vote of Security Holders",
+    "5.08": "Shareholder Director Nominations",
+    "6.01": "ABS Informational and Computational Material",
+    "6.02": "Change of Servicer or Trustee",
+    "6.03": "Change in Credit Enhancement or Other External Support",
+    "6.04": "Failure to Make a Required Distribution",
+    "6.05": "Securities Act Updating Disclosure",
+    "6.10": "Alternative Filings of Asset-Backed Issuers",
+    "7.01": "Regulation FD Disclosure",
+    "8.01": "Other Events",
+    "9.01": "Financial Statements and Exhibits",
+}
+
+
+def _fallback_filing_sections_from_8k_events(filing: Any) -> list[dict[str, Any]]:
+    """Derive 8-K section headings from structured report items when markdown parsing fails."""
+    sections: list[dict[str, Any]] = []
+    seen_item_codes: set[str] = set()
+    for event in extract_material_events(filing):
+        item_code = str(event.get("item_code") or "").strip()
+        if not item_code or item_code in seen_item_codes:
+            continue
+        seen_item_codes.add(item_code)
+
+        raw_heading = str(event.get("item") or "").strip()
+        title = ""
+        match = re.match(
+            r"(?i)item\s+\d+(?:\.\d+)?[a-z]?\s*[.:-]?\s*(.*)",
+            raw_heading,
+        )
+        if match:
+            title = match.group(1).strip()
+        if not title:
+            title = _STANDARD_8K_ITEM_TITLES.get(item_code, "")
+
+        heading = raw_heading or f"Item {item_code}"
+        if title and heading.lower() == f"item {item_code}".lower():
+            heading = f"Item {item_code}. {title}"
+
+        sections.append(
+            {
+                "item_code": item_code,
+                "heading": heading,
+                "title": title or None,
+                "line_number": None,
+                "text_length": int(event.get("text_length") or 0),
+                "preview": str(event.get("summary") or "").strip() or None,
+            }
+        )
+    sections.sort(key=lambda section: str(section.get("item_code") or ""))
+    return sections
 
 # ---------------------------------------------------------------------------
 # Re-exports (unchanged signatures)
@@ -342,6 +417,8 @@ def get_filing_sections(ticker: str, accession_number: str) -> list[dict[str, An
             return []
 
         sections = list_filing_item_sections(filing.markdown())
+        if not sections and str(getattr(filing, "form", "") or "").upper().startswith("8-K"):
+            sections = _fallback_filing_sections_from_8k_events(filing)
         filing_metadata = {
             "accession_number": getattr(filing, "accession_no", None),
             "form_type": getattr(filing, "form", None),
