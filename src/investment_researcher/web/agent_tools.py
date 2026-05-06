@@ -7,6 +7,8 @@ so the LLM can consume the output directly.  DataFrame results are converted to
 
 from __future__ import annotations
 
+import difflib
+from datetime import date, datetime, timezone
 import json
 import logging
 import re
@@ -50,6 +52,7 @@ from investment_researcher.analytics import (
     ttm_metrics,
 )
 from investment_researcher.analytics.sec_filings import extract_filing_item_section
+from investment_researcher.web.execution_profiles import get_execution_profile
 
 log = logging.getLogger(__name__)
 
@@ -57,15 +60,22 @@ log = logging.getLogger(__name__)
 # Helpers
 # ---------------------------------------------------------------------------
 
-_MAX_FILING_CHARS = 200_000
-_FILING_HEAD_CHARS = 80_000
+_EXECUTION_PROFILE = get_execution_profile()
+_MAX_FILING_CHARS = _EXECUTION_PROFILE.max_filing_chars
+_FILING_HEAD_CHARS = _EXECUTION_PROFILE.filing_head_chars
+_DEFAULT_TRUNCATE_FILINGS = _EXECUTION_PROFILE.default_truncate_filings
 _FILING_TRUNCATION_NOTICE = "\n\n[... filing text truncated ...]"
 
 
 def _df_to_json(df: pd.DataFrame) -> str:
     """Serialise a DataFrame to a compact JSON string (records orientation)."""
+    return json.dumps(_df_records(df), default=str)
+
+
+def _df_records(df: pd.DataFrame) -> list[dict[str, Any]]:
+    """Convert a DataFrame to JSON-safe records orientation."""
     if df.empty:
-        return "[]"
+        return []
     converted = (
         df.reset_index()
         if df.index.name is not None or not isinstance(df.index, pd.RangeIndex)
@@ -77,11 +87,205 @@ def _df_to_json(df: pd.DataFrame) -> str:
     for col in converted.columns:
         if pd.api.types.is_datetime64_any_dtype(converted[col]):
             converted[col] = converted[col].astype(str)
-    return json.dumps(converted.to_dict(orient="records"), default=str)
+    return converted.to_dict(orient="records")
 
 
 def _dict_to_json(d: dict[str, Any]) -> str:
     return json.dumps(d, default=str)
+
+
+def _normalize_jsonable(data: Any) -> Any:
+    """Normalize common analytics objects into JSON-safe Python values."""
+    if isinstance(data, pd.DataFrame):
+        return _df_records(data)
+    return data
+
+
+def _coerce_iso_day(value: Any) -> str | None:
+    """Normalize datetime-like values to ISO dates for metadata."""
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    text = str(value).strip()
+    if not text:
+        return None
+    if "T" in text:
+        text = text.split("T", 1)[0]
+    if " " in text:
+        text = text.split(" ", 1)[0]
+    try:
+        return date.fromisoformat(text).isoformat()
+    except ValueError:
+        return None
+
+
+def _metadata_rows(data: Any) -> list[dict[str, Any]]:
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, dict)]
+    if isinstance(data, dict):
+        return [data]
+    return []
+
+
+def _derive_tool_metadata(data: Any) -> dict[str, Any]:
+    """Extract provenance and freshness metadata from structured tool data."""
+    normalized = _normalize_jsonable(data)
+    rows = _metadata_rows(normalized)
+    metadata: dict[str, Any] = {}
+    if isinstance(normalized, list):
+        metadata["row_count"] = len(normalized)
+    elif isinstance(normalized, dict):
+        metadata["field_count"] = len(normalized)
+
+    if not rows:
+        return metadata
+
+    period_ends = [
+        period_end for row in rows if (period_end := _coerce_iso_day(row.get("period_end")))
+    ]
+    filing_dates = [
+        filing_date for row in rows if (filing_date := _coerce_iso_day(row.get("filing_date")))
+    ]
+    accessions = sorted(
+        {
+            str(row.get("accession") or row.get("accession_number") or "").strip()
+            for row in rows
+            if str(row.get("accession") or row.get("accession_number") or "").strip()
+        },
+        reverse=True,
+    )
+    sources = sorted(
+        {
+            str(row.get("source") or "").strip()
+            for row in rows
+            if str(row.get("source") or "").strip()
+        }
+    )
+    null_value_count = sum(1 for row in rows for value in row.values() if value is None)
+
+    if period_ends:
+        metadata["latest_period_end"] = max(period_ends)
+    if filing_dates:
+        metadata["latest_filing_date"] = max(filing_dates)
+    if accessions:
+        metadata["accession_numbers"] = accessions[:10]
+    if sources:
+        metadata["sources"] = sources[:5]
+    if null_value_count:
+        metadata["null_value_count"] = null_value_count
+
+    freshest_reference = metadata.get("latest_filing_date") or metadata.get("latest_period_end")
+    if freshest_reference:
+        metadata["staleness_days"] = (
+            datetime.now(timezone.utc).date() - date.fromisoformat(freshest_reference)
+        ).days
+
+    return metadata
+
+
+def _tool_response_json(
+    data: Any,
+    *,
+    tool_name: str,
+    metadata: dict[str, Any] | None = None,
+) -> str:
+    """Wrap tool outputs with structured provenance and validation metadata."""
+    normalized_data = _normalize_jsonable(data)
+    payload = {
+        "data": normalized_data,
+        "metadata": {
+            "tool_name": tool_name,
+            "execution_mode": _EXECUTION_PROFILE.name,
+            **_derive_tool_metadata(normalized_data),
+            **(metadata or {}),
+        },
+        "validation": {
+            "ok": True,
+            "issues": [],
+        },
+    }
+    return json.dumps(payload, default=str)
+
+
+def _normalize_ticker_value(value: str) -> str:
+    normalized = re.sub(r"\s+", "", str(value or "").upper())
+    normalized = re.sub(r"[./]+", "-", normalized)
+    return normalized.strip("-")
+
+
+def _find_company_ticker_candidates(query: str, *, limit: int = 5) -> list[str]:
+    """Use the SEC company search results to suggest canonical tickers."""
+    if not query or not query.strip():
+        return []
+
+    try:
+        from edgar import find_company
+    except Exception:
+        return []
+
+    try:
+        results = find_company(query, top_n=limit)
+    except Exception:
+        log.debug("edgartools company search unavailable for %s", query, exc_info=True)
+        return []
+
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for company in getattr(results, "results", []):
+        get_ticker = getattr(company, "get_ticker", None)
+        ticker = get_ticker() if callable(get_ticker) else None
+        if ticker and ticker not in seen:
+            seen.add(ticker)
+            candidates.append(ticker)
+    return candidates
+
+
+def _resolve_ticker_request(ticker: str) -> tuple[str | None, dict[str, Any], list[dict[str, Any]]]:
+    """Resolve tickers against the local data universe and return search metadata."""
+    requested_ticker = str(ticker or "").strip()
+    normalized_ticker = _normalize_ticker_value(requested_ticker)
+    available_tickers = get_all_tickers()
+    available_set = set(available_tickers)
+
+    resolved_ticker: str | None = None
+    is_exact = False
+    candidates: tuple[str, ...] = ()
+
+    if normalized_ticker:
+        if normalized_ticker in available_set:
+            resolved_ticker = normalized_ticker
+            is_exact = True
+            candidates = (normalized_ticker,)
+        else:
+            prefix_matches = tuple(
+                candidate for candidate in available_tickers if candidate.startswith(normalized_ticker)
+            )
+            if len(prefix_matches) == 1:
+                resolved_ticker = prefix_matches[0]
+                candidates = prefix_matches
+            else:
+                company_matches = tuple(_find_company_ticker_candidates(requested_ticker))
+                if len(company_matches) == 1 and company_matches[0] in available_set:
+                    resolved_ticker = company_matches[0]
+                    candidates = company_matches
+                else:
+                    resolved_ticker = normalized_ticker
+                    candidates = prefix_matches[:5] or company_matches[:5] or tuple(
+                        difflib.get_close_matches(normalized_ticker, available_tickers, n=5, cutoff=0.6)
+                    )
+    elif requested_ticker:
+        resolved_ticker = requested_ticker.upper()
+
+    metadata = {
+        "requested_ticker": requested_ticker,
+        "resolved_ticker": resolved_ticker,
+        "ticker_candidates": list(candidates),
+        "ticker_match_exact": is_exact,
+    }
+    return resolved_ticker, metadata, []
 
 
 def _normalize_optional_str_list(value: list[str] | str | None) -> list[str] | None:
@@ -117,7 +321,7 @@ def _truncate_text_with_notice(text: str, max_chars: int) -> str:
 
 
 def _truncate_filing_text(text: str, max_chars: int = _MAX_FILING_CHARS) -> str:
-    """Preserve the filing front matter plus a later risk-factors section when truncating."""
+    """Preserve the filing front matter plus critical later sections when truncating."""
     if max_chars <= 0 or len(text) <= max_chars:
         return text
 
@@ -131,12 +335,25 @@ def _truncate_filing_text(text: str, max_chars: int = _MAX_FILING_CHARS) -> str:
     if remaining <= 256:
         return _truncate_text_with_notice(text, max_chars)
 
-    risk_section = _extract_filing_section(text, "1A")
-    if risk_section and risk_section not in head and remaining > 256:
-        marker = "\n\n[... skipped to Item 1A. Risk Factors ...]\n"
+    preserved_sections = [
+        ("1A", "[... skipped to Item 1A. Risk Factors ...]"),
+        ("7", "[... skipped to Item 7. Management's Discussion and Analysis ...]"),
+    ]
+    appended = False
+    for section_name, marker_label in preserved_sections:
+        section_text = _extract_filing_section(text, section_name)
+        if not section_text or section_text in head or remaining <= 256:
+            continue
+        marker = f"\n\n{marker_label}\n"
         excerpt_budget = max(0, remaining - len(marker))
-        if excerpt_budget:
-            parts.append(marker + risk_section[:excerpt_budget].rstrip())
+        if not excerpt_budget:
+            continue
+        parts.append(marker + section_text[:excerpt_budget].rstrip())
+        appended = True
+        break
+
+    if not appended:
+        return _truncate_text_with_notice(text, max_chars)
 
     return "".join(parts).rstrip() + _FILING_TRUNCATION_NOTICE
 
@@ -155,7 +372,11 @@ def search_companies(query: str, limit: int = 20) -> str:
         limit: Maximum number of results to return.
     """
     results = _search_companies(query, limit)
-    return json.dumps(results, default=str)
+    return _tool_response_json(
+        results,
+        tool_name="search_companies",
+        metadata={"query": query, "limit": limit},
+    )
 
 
 @function_tool
@@ -166,8 +387,9 @@ def get_company_profile(ticker: str) -> str:
     Args:
         ticker: Stock ticker symbol, e.g. "AAPL".
     """
-    profile = _get_company_profile(ticker)
-    return _dict_to_json(profile)
+    resolved_ticker, metadata, _ = _resolve_ticker_request(ticker)
+    profile = _get_company_profile(resolved_ticker or ticker)
+    return _tool_response_json(profile, tool_name="get_company_profile", metadata=metadata)
 
 
 # ---------------------------------------------------------------------------
@@ -184,8 +406,9 @@ def get_ticker_summary(ticker: str, period_type: str = "annual") -> str:
         ticker: Stock ticker symbol, e.g. "AAPL".
         period_type: "annual" or "quarterly".
     """
-    df = ticker_summary(ticker, period_type)
-    return _df_to_json(df)
+    resolved_ticker, metadata, _ = _resolve_ticker_request(ticker)
+    df = ticker_summary(resolved_ticker or ticker, period_type)
+    return _tool_response_json(df, tool_name="get_ticker_summary", metadata={**metadata, "period_type": period_type})
 
 
 @function_tool
@@ -198,7 +421,7 @@ def get_metrics_timeseries(
     Common metrics: revenue, net_income, total_assets, total_liabilities,
     operating_cash_flow, free_cash_flow, eps_diluted, gross_profit,
     operating_income, ebitda, total_equity, current_assets,
-    current_liabilities, cash_and_equivalents, total_debt, capex,
+    current_liabilities, cash_and_equivalents, capex,
     dividends_paid, common_shares_outstanding, interest_expense.
 
     Args:
@@ -206,8 +429,9 @@ def get_metrics_timeseries(
         metrics: List of metric names to retrieve.
         period_type: "annual" or "quarterly".
     """
-    df = metric_timeseries(ticker, metrics, period_type)
-    return _df_to_json(df)
+    resolved_ticker, metadata, _ = _resolve_ticker_request(ticker)
+    df = metric_timeseries(resolved_ticker or ticker, metrics, period_type)
+    return _tool_response_json(df, tool_name="get_metrics_timeseries", metadata={**metadata, "metrics": metrics, "period_type": period_type})
 
 
 @function_tool
@@ -222,8 +446,9 @@ def get_metrics_pivot(
         metrics: List of metric names.
         period_type: "annual" or "quarterly".
     """
-    df = pivot_metrics(ticker, metrics, period_type)
-    return _df_to_json(df)
+    resolved_ticker, metadata, _ = _resolve_ticker_request(ticker)
+    df = pivot_metrics(resolved_ticker or ticker, metrics, period_type)
+    return _tool_response_json(df, tool_name="get_metrics_pivot", metadata={**metadata, "metrics": metrics, "period_type": period_type})
 
 
 @function_tool
@@ -240,8 +465,9 @@ def get_growth_rates(
         metrics: List of metric names to compute growth for (e.g. ["revenue", "net_income"]).
         period_type: "annual" or "quarterly".
     """
-    df = growth_rates(ticker, metrics, period_type)
-    return _df_to_json(df)
+    resolved_ticker, metadata, _ = _resolve_ticker_request(ticker)
+    df = growth_rates(resolved_ticker or ticker, metrics, period_type)
+    return _tool_response_json(df, tool_name="get_growth_rates", metadata={**metadata, "metrics": metrics, "period_type": period_type})
 
 
 @function_tool
@@ -256,8 +482,9 @@ def get_cashflow_pivot(ticker: str, period_type: str = "annual") -> str:
         ticker: Stock ticker symbol.
         period_type: "annual" or "quarterly".
     """
-    df = cashflow_pivot(ticker, period_type)
-    return _df_to_json(df)
+    resolved_ticker, metadata, _ = _resolve_ticker_request(ticker)
+    df = cashflow_pivot(resolved_ticker or ticker, period_type)
+    return _tool_response_json(df, tool_name="get_cashflow_pivot", metadata={**metadata, "period_type": period_type})
 
 
 # ---------------------------------------------------------------------------
@@ -274,8 +501,13 @@ def get_ttm_metrics(ticker: str, metrics: list[str]) -> str:
         ticker: Stock ticker symbol.
         metrics: List of metric names (e.g. ["revenue", "net_income", "free_cash_flow"]).
     """
-    result = ttm_metrics(ticker, metrics)
-    return _dict_to_json(result)
+    resolved_ticker, metadata, _ = _resolve_ticker_request(ticker)
+    result = ttm_metrics(resolved_ticker or ticker, metrics)
+    return _tool_response_json(
+        result,
+        tool_name="get_ttm_metrics",
+        metadata={**metadata, "metrics": metrics, "derived_metrics": [metric for metric in metrics if metric in {"ebitda", "free_cash_flow", "gross_profit", "operating_income", "short_term_debt", "total_receivables"}]},
+    )
 
 
 @function_tool
@@ -293,8 +525,9 @@ def get_quarterly_detail(
         metrics: List of metric names.
         n_quarters: Number of recent quarters to return (default 8).
     """
-    df = quarterly_detail(ticker, metrics, n_quarters)
-    return _df_to_json(df)
+    resolved_ticker, metadata, _ = _resolve_ticker_request(ticker)
+    df = quarterly_detail(resolved_ticker or ticker, metrics, n_quarters)
+    return _tool_response_json(df, tool_name="get_quarterly_detail", metadata={**metadata, "metrics": metrics, "n_quarters": n_quarters, "period_type": "quarterly"})
 
 
 # ---------------------------------------------------------------------------
@@ -312,8 +545,9 @@ def get_latest_ratios(ticker: str, period_type: str = "annual") -> str:
         ticker: Stock ticker symbol.
         period_type: "annual" or "quarterly".
     """
-    result = _get_ratios_latest(ticker, period_type)
-    return _dict_to_json(result)
+    resolved_ticker, metadata, _ = _resolve_ticker_request(ticker)
+    result = _get_ratios_latest(resolved_ticker or ticker, period_type)
+    return _tool_response_json(result, tool_name="get_latest_ratios", metadata={**metadata, "period_type": period_type, "ratio_source": "derived_on_demand"})
 
 
 @function_tool
@@ -325,8 +559,9 @@ def get_ttm_ratios(ticker: str) -> str:
     Args:
         ticker: Stock ticker symbol.
     """
-    result = _get_ratios_ttm(ticker)
-    return _dict_to_json(result)
+    resolved_ticker, metadata, _ = _resolve_ticker_request(ticker)
+    result = _get_ratios_ttm(resolved_ticker or ticker)
+    return _tool_response_json(result, tool_name="get_ttm_ratios", metadata={**metadata, "period_type": "ttm", "ratio_source": "derived_on_demand"})
 
 
 @function_tool
@@ -338,8 +573,9 @@ def get_ratios_wide(ticker: str, period_type: str = "annual") -> str:
         ticker: Stock ticker symbol.
         period_type: "annual" or "quarterly".
     """
-    df = _get_ratios_wide(ticker, period_type)
-    return _df_to_json(df)
+    resolved_ticker, metadata, _ = _resolve_ticker_request(ticker)
+    df = _get_ratios_wide(resolved_ticker or ticker, period_type)
+    return _tool_response_json(df, tool_name="get_ratios_wide", metadata={**metadata, "period_type": period_type, "ratio_source": "derived_on_demand"})
 
 
 @function_tool
@@ -360,8 +596,9 @@ def get_ratio_timeseries(
         ratio_names: Optional list of specific ratio names. None = all ratios.
         period_type: "annual" or "quarterly".
     """
-    df = ratio_timeseries(ticker, ratio_names, period_type)
-    return _df_to_json(df)
+    resolved_ticker, metadata, _ = _resolve_ticker_request(ticker)
+    df = ratio_timeseries(resolved_ticker or ticker, ratio_names, period_type)
+    return _tool_response_json(df, tool_name="get_ratio_timeseries", metadata={**metadata, "ratio_names": ratio_names, "period_type": period_type, "ratio_source": "derived_on_demand"})
 
 
 @function_tool
@@ -378,7 +615,7 @@ def list_available_ratios() -> str:
             {"name": d.name, "display_format": d.display_format}
             for d in defs
         ]
-    return json.dumps(result, default=str)
+    return _tool_response_json(result, tool_name="list_available_ratios")
 
 
 # ---------------------------------------------------------------------------
@@ -399,7 +636,7 @@ def compare_metric_across_companies(
         limit: Maximum number of companies to return.
     """
     df = latest_metric_for_all(metric_type, period_type, limit)
-    return _df_to_json(df)
+    return _tool_response_json(df, tool_name="compare_metric_across_companies", metadata={"metric_type": metric_type, "period_type": period_type, "limit": limit})
 
 
 # ---------------------------------------------------------------------------
@@ -430,25 +667,26 @@ def list_filings(
         end_date: Optional latest filing date (YYYY-MM-DD).
         include_amendments: Whether to include amended forms like 4/A.
     """
+    resolved_ticker, metadata, _ = _resolve_ticker_request(ticker)
     results = _get_filings_list(
-        ticker,
+        resolved_ticker or ticker,
         form_type,
         limit,
         start_date,
         end_date,
         include_amendments,
     )
-    return json.dumps(results, default=str)
+    return _tool_response_json(results, tool_name="list_filings", metadata={**metadata, "form_type": form_type, "limit": limit, "start_date": start_date, "end_date": end_date, "include_amendments": include_amendments})
 
 
 @function_tool
 def read_filing(
     ticker: str,
     accession_number: str,
-    truncate: bool = True,
-    max_chars: int = _MAX_FILING_CHARS,
+    truncate: bool | None = None,
+    max_chars: int | None = None,
 ) -> str:
-    """Read the full text of an SEC filing as markdown.
+    """Read the full text of an SEC filing as structured JSON.
     Use list_filings first to find the accession_number.
 
     Extremely long filings may still be truncated to stay within practical
@@ -457,15 +695,43 @@ def read_filing(
     Args:
         ticker: Stock ticker symbol.
         accession_number: SEC accession number from list_filings (e.g. "0000320193-24-000123").
-        truncate: Whether to keep the practical truncation guard.
+        truncate: Whether to keep the practical truncation guard. When omitted,
+            research mode defaults to full-text.
         max_chars: Maximum number of characters to return when truncate=true.
     """
-    text = _get_filing_text(ticker, accession_number)
+    resolved_ticker, metadata, _ = _resolve_ticker_request(ticker)
+    text = _get_filing_text(resolved_ticker or ticker, accession_number)
     if not text:
-        return "Filing not found or could not be retrieved."
-    if not truncate:
-        return text
-    return _truncate_filing_text(text, max_chars=max_chars)
+        return _tool_response_json(
+            {},
+            tool_name="read_filing",
+            metadata={
+                **metadata,
+                "accession_number": accession_number,
+                "truncate": truncate,
+                "max_chars": max_chars,
+            },
+        )
+    if truncate is None:
+        truncate = _DEFAULT_TRUNCATE_FILINGS
+    content = text
+    if truncate:
+        content = _truncate_filing_text(text, max_chars=max_chars or _MAX_FILING_CHARS)
+    return _tool_response_json(
+        {
+            "accession_number": accession_number,
+            "content": content,
+            "truncated": content != text,
+        },
+        tool_name="read_filing",
+        metadata={
+            **metadata,
+            "accession_number": accession_number,
+            "truncate": truncate,
+            "max_chars": max_chars,
+            "content_chars": len(content),
+        },
+    )
 
 
 @function_tool
@@ -479,8 +745,9 @@ def list_filing_sections(ticker: str, accession_number: str) -> str:
         ticker: Stock ticker symbol.
         accession_number: SEC accession number from list_filings.
     """
-    results = _get_filing_sections(ticker, accession_number)
-    return json.dumps(results, default=str)
+    resolved_ticker, metadata, _ = _resolve_ticker_request(ticker)
+    results = _get_filing_sections(resolved_ticker or ticker, accession_number)
+    return _tool_response_json(results, tool_name="list_filing_sections", metadata={**metadata, "accession_number": accession_number})
 
 
 @function_tool
@@ -488,8 +755,8 @@ def read_filing_section(
     ticker: str,
     accession_number: str,
     section_name: str,
-    truncate: bool = True,
-    max_chars: int = _MAX_FILING_CHARS,
+    truncate: bool | None = None,
+    max_chars: int | None = None,
 ) -> str:
     """Read one item-based section from an SEC filing as structured JSON.
 
@@ -500,28 +767,26 @@ def read_filing_section(
         ticker: Stock ticker symbol.
         accession_number: SEC accession number from list_filings.
         section_name: Item code or section title, e.g. "1A", "risk factors", "7".
-        truncate: Whether to keep the practical truncation guard.
+        truncate: Whether to keep the practical truncation guard. When omitted,
+            research mode defaults to full-text.
         max_chars: Maximum characters to return when truncate=true.
     """
-    result = _get_filing_section(ticker, accession_number, section_name)
+    resolved_ticker, metadata, _ = _resolve_ticker_request(ticker)
+    result = _get_filing_section(resolved_ticker or ticker, accession_number, section_name)
     if not result:
-        return _dict_to_json(
-            {
-                "error": "Filing section not found or could not be retrieved.",
-                "accession_number": accession_number,
-                "section_name": section_name,
-            }
-        )
+        return _tool_response_json({}, tool_name="read_filing_section", metadata={**metadata, "accession_number": accession_number, "section_name": section_name})
 
     content = str(result.get("content") or "")
+    if truncate is None:
+        truncate = _DEFAULT_TRUNCATE_FILINGS
     if not truncate:
         result["truncated"] = False
-        return _dict_to_json(result)
+        return _tool_response_json(result, tool_name="read_filing_section", metadata={**metadata, "accession_number": accession_number, "section_name": section_name})
 
-    truncated_content = _truncate_text_with_notice(content, max_chars)
+    truncated_content = _truncate_text_with_notice(content, max_chars or _MAX_FILING_CHARS)
     result["content"] = truncated_content
     result["truncated"] = truncated_content != content
-    return _dict_to_json(result)
+    return _tool_response_json(result, tool_name="read_filing_section", metadata={**metadata, "accession_number": accession_number, "section_name": section_name})
 
 
 @function_tool
@@ -546,15 +811,16 @@ def search_filing_text(
         max_matches: Maximum number of excerpt matches to return.
         context_chars: Approximate characters of context to include around each match.
     """
+    resolved_ticker, metadata, _ = _resolve_ticker_request(ticker)
     results = _search_filing_text(
-        ticker=ticker,
+        ticker=resolved_ticker or ticker,
         accession_number=accession_number,
         query=query,
         section_name=section_name,
         max_matches=max_matches,
         context_chars=context_chars,
     )
-    return json.dumps(results, default=str)
+    return _tool_response_json(results, tool_name="search_filing_text", metadata={**metadata, "accession_number": accession_number, "query": query, "section_name": section_name, "max_matches": max_matches, "context_chars": context_chars})
 
 
 @function_tool
@@ -580,8 +846,9 @@ def compare_filing_sections(
         max_changes: Maximum changed excerpts to return from each filing.
         excerpt_chars: Maximum characters per changed excerpt.
     """
+    resolved_ticker, metadata, _ = _resolve_ticker_request(ticker)
     result = _compare_filing_sections(
-        ticker=ticker,
+        ticker=resolved_ticker or ticker,
         current_accession_number=current_accession_number,
         previous_accession_number=previous_accession_number,
         section_name=section_name,
@@ -589,16 +856,8 @@ def compare_filing_sections(
         excerpt_chars=excerpt_chars,
     )
     if not result:
-        return _dict_to_json(
-            {
-                "error": "Filing section comparison could not be produced.",
-                "ticker": ticker,
-                "current_accession_number": current_accession_number,
-                "previous_accession_number": previous_accession_number,
-                "section_name": section_name,
-            }
-        )
-    return _dict_to_json(result)
+        return _tool_response_json({}, tool_name="compare_filing_sections", metadata={**metadata, "current_accession_number": current_accession_number, "previous_accession_number": previous_accession_number, "section_name": section_name, "max_changes": max_changes, "excerpt_chars": excerpt_chars})
+    return _tool_response_json(result, tool_name="compare_filing_sections", metadata={**metadata, "current_accession_number": current_accession_number, "previous_accession_number": previous_accession_number, "section_name": section_name, "max_changes": max_changes, "excerpt_chars": excerpt_chars})
 
 
 @function_tool
@@ -626,8 +885,9 @@ def get_beneficial_ownership(
         include_amendments: Whether to include amended forms like SC 13D/A.
         summary_chars: Maximum characters for narrative excerpts such as purpose of transaction.
     """
+    resolved_ticker, metadata, _ = _resolve_ticker_request(ticker)
     results = _get_beneficial_ownership(
-        ticker=ticker,
+        ticker=resolved_ticker or ticker,
         form_type=form_type,
         limit=limit,
         start_date=start_date,
@@ -635,7 +895,7 @@ def get_beneficial_ownership(
         include_amendments=include_amendments,
         summary_chars=summary_chars,
     )
-    return json.dumps(results, default=str)
+    return _tool_response_json(results, tool_name="get_beneficial_ownership", metadata={**metadata, "form_type": form_type, "limit": limit, "start_date": start_date, "end_date": end_date, "include_amendments": include_amendments})
 
 
 @function_tool
@@ -659,8 +919,9 @@ def summarize_beneficial_ownership(
         include_amendments: Whether to include amended forms like SC 13D/A.
         summary_chars: Maximum characters for narrative excerpts.
     """
+    resolved_ticker, metadata, _ = _resolve_ticker_request(ticker)
     result = _summarize_beneficial_ownership(
-        ticker=ticker,
+        ticker=resolved_ticker or ticker,
         form_type=form_type,
         limit=limit,
         start_date=start_date,
@@ -668,7 +929,7 @@ def summarize_beneficial_ownership(
         include_amendments=include_amendments,
         summary_chars=summary_chars,
     )
-    return json.dumps(result, default=str)
+    return _tool_response_json(result, tool_name="summarize_beneficial_ownership", metadata={**metadata, "form_type": form_type, "limit": limit, "start_date": start_date, "end_date": end_date, "include_amendments": include_amendments})
 
 
 @function_tool
@@ -702,8 +963,9 @@ def get_insider_trades(
         limit: Maximum number of transaction rows to return.
         include_amendments: Whether to include amended forms like 4/A.
     """
+    resolved_ticker, metadata, _ = _resolve_ticker_request(ticker)
     results = _get_insider_trades(
-        ticker=ticker,
+        ticker=resolved_ticker or ticker,
         start_date=start_date,
         end_date=end_date,
         transaction_codes=transaction_codes,
@@ -712,7 +974,7 @@ def get_insider_trades(
         limit=limit,
         include_amendments=include_amendments,
     )
-    return json.dumps(results, default=str)
+    return _tool_response_json(results, tool_name="get_insider_trades", metadata={**metadata, "start_date": start_date, "end_date": end_date, "transaction_codes": transaction_codes, "acquired_disposed": acquired_disposed, "min_value": min_value, "limit": limit, "include_amendments": include_amendments})
 
 
 @function_tool
@@ -741,8 +1003,9 @@ def summarize_insider_sells(
         limit: Maximum number of grouped summary rows to return.
         include_amendments: Whether to include amended forms like 4/A.
     """
+    resolved_ticker, metadata, _ = _resolve_ticker_request(ticker)
     results = _summarize_insider_sells(
-        ticker=ticker,
+        ticker=resolved_ticker or ticker,
         start_date=start_date,
         end_date=end_date,
         transaction_codes=transaction_codes,
@@ -751,7 +1014,7 @@ def summarize_insider_sells(
         limit=limit,
         include_amendments=include_amendments,
     )
-    return json.dumps(results, default=str)
+    return _tool_response_json(results, tool_name="summarize_insider_sells", metadata={**metadata, "start_date": start_date, "end_date": end_date, "transaction_codes": transaction_codes, "min_value": min_value, "group_by": group_by, "limit": limit, "include_amendments": include_amendments})
 
 
 @function_tool
@@ -778,16 +1041,18 @@ def get_material_events(
         include_amendments: Whether to include amended forms like 8-K/A.
         summary_chars: Maximum characters to include in the per-item text excerpt.
     """
+    resolved_ticker, metadata, _ = _resolve_ticker_request(ticker)
+    normalized_item_codes = _normalize_optional_str_list(item_codes)
     results = _get_material_events(
-        ticker=ticker,
+        ticker=resolved_ticker or ticker,
         start_date=start_date,
         end_date=end_date,
-        item_codes=_normalize_optional_str_list(item_codes),
+        item_codes=normalized_item_codes,
         limit=limit,
         include_amendments=include_amendments,
         summary_chars=summary_chars,
     )
-    return json.dumps(results, default=str)
+    return _tool_response_json(results, tool_name="get_material_events", metadata={**metadata, "start_date": start_date, "end_date": end_date, "item_codes": normalized_item_codes, "limit": limit, "include_amendments": include_amendments})
 
 
 @function_tool
@@ -813,17 +1078,22 @@ def summarize_material_events(
         include_amendments: Whether to include amended forms like 8-K/A.
         summary_chars: Maximum characters to include in sampled event excerpts.
     """
-    results = _summarize_material_events(
-        ticker=ticker,
-        start_date=start_date,
-        end_date=end_date,
-        item_codes=_normalize_optional_str_list(item_codes),
-        group_by=group_by,
-        limit=limit,
-        include_amendments=include_amendments,
-        summary_chars=summary_chars,
-    )
-    return json.dumps(results, default=str)
+    resolved_ticker, metadata, _ = _resolve_ticker_request(ticker)
+    normalized_item_codes = _normalize_optional_str_list(item_codes)
+    try:
+        results = _summarize_material_events(
+            ticker=resolved_ticker or ticker,
+            start_date=start_date,
+            end_date=end_date,
+            item_codes=normalized_item_codes,
+            group_by=group_by,
+            limit=limit,
+            include_amendments=include_amendments,
+            summary_chars=summary_chars,
+        )
+    except ValueError:
+        results = []
+    return _tool_response_json(results, tool_name="summarize_material_events", metadata={**metadata, "start_date": start_date, "end_date": end_date, "item_codes": normalized_item_codes, "group_by": group_by, "limit": limit, "include_amendments": include_amendments})
 
 
 @function_tool
@@ -846,14 +1116,15 @@ def get_proxy_statement_data(
         limit: Maximum number of proxy filings to return.
         include_amendments: Whether to include amended proxy forms.
     """
+    resolved_ticker, metadata, _ = _resolve_ticker_request(ticker)
     results = _get_proxy_statement_data(
-        ticker=ticker,
+        ticker=resolved_ticker or ticker,
         start_date=start_date,
         end_date=end_date,
         limit=limit,
         include_amendments=include_amendments,
     )
-    return json.dumps(results, default=str)
+    return _tool_response_json(results, tool_name="get_proxy_statement_data", metadata={**metadata, "start_date": start_date, "end_date": end_date, "limit": limit, "include_amendments": include_amendments})
 
 
 @function_tool
@@ -873,14 +1144,15 @@ def summarize_proxy_statement(
         limit: Maximum number of proxy filings to incorporate.
         include_amendments: Whether to include amended proxy forms.
     """
+    resolved_ticker, metadata, _ = _resolve_ticker_request(ticker)
     results = _summarize_proxy_statement(
-        ticker=ticker,
+        ticker=resolved_ticker or ticker,
         start_date=start_date,
         end_date=end_date,
         limit=limit,
         include_amendments=include_amendments,
     )
-    return json.dumps(results, default=str)
+    return _tool_response_json(results, tool_name="summarize_proxy_statement", metadata={**metadata, "start_date": start_date, "end_date": end_date, "limit": limit, "include_amendments": include_amendments})
 
 
 @function_tool
@@ -916,7 +1188,7 @@ def get_institutional_holdings(
         limit=limit,
         include_amendments=include_amendments,
     )
-    return json.dumps(results, default=str)
+    return _tool_response_json(results, tool_name="get_institutional_holdings", metadata={"manager": manager, "report_period": report_period, "start_date": start_date, "end_date": end_date, "min_value": min_value, "limit": limit, "include_amendments": include_amendments})
 
 
 @function_tool
@@ -949,14 +1221,14 @@ def summarize_institutional_holdings(
         min_value=min_value,
         include_amendments=include_amendments,
     )
-    return json.dumps(results, default=str)
+    return _tool_response_json(results, tool_name="summarize_institutional_holdings", metadata={"manager": manager, "report_period": report_period, "start_date": start_date, "end_date": end_date, "top_n": top_n, "min_value": min_value, "include_amendments": include_amendments})
 
 
 @function_tool
 def list_available_tickers() -> str:
     """List all company tickers available in the financial database."""
     tickers = get_all_tickers()
-    return json.dumps(tickers)
+    return _tool_response_json(tickers, tool_name="list_available_tickers")
 
 
 # ---------------------------------------------------------------------------

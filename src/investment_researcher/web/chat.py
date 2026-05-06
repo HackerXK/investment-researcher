@@ -39,6 +39,7 @@ from investment_researcher.analytics import (
     quarterly_detail as analytics_quarterly_detail,
     ratio_timeseries as analytics_ratio_timeseries,
     search_filing_text as analytics_search_filing_text,
+    summarize_beneficial_ownership as analytics_summarize_beneficial_ownership,
     summarize_insider_sells as analytics_summarize_insider_sells,
     summarize_institutional_holdings as analytics_summarize_institutional_holdings,
     ttm_metrics as analytics_ttm_metrics,
@@ -52,6 +53,9 @@ from investment_researcher.analytics.sec_filings import (
     summarize_institutional_holdings_rows,
 )
 from investment_researcher.web.agent_tools import ALL_TOOLS
+from investment_researcher.web.execution_profiles import get_execution_profile
+from investment_researcher.web.query_normalization import normalize_research_query
+from investment_researcher.web.research_execution import execute_research_request
 from investment_researcher.web.tracing import (
     configure_langfuse_tracing,
     start_chat_trace,
@@ -151,7 +155,7 @@ call multiple tools if the question spans several companies or data types.
 ## Available metric names (not exhaustive)
 revenue, net_income, gross_profit, operating_income, ebitda, total_assets, \
 total_liabilities, total_equity, current_assets, current_liabilities, \
-cash_and_equivalents, total_debt, operating_cash_flow, free_cash_flow, \
+cash_and_equivalents, operating_cash_flow, free_cash_flow, \
 capex, dividends_paid, eps_diluted, eps_basic, common_shares_outstanding, \
 interest_expense, income_tax_expense, cost_of_revenue, research_and_development.
 """
@@ -182,13 +186,15 @@ def build_agent() -> Agent:
 # Chat handler (SSE streaming)
 # ---------------------------------------------------------------------------
 
+_EXECUTION_PROFILE = get_execution_profile()
+
 # Maximum agent turns to prevent runaway loops
-_MAX_TURNS = 15
+_MAX_TURNS = _EXECUTION_PROFILE.max_turns
 _FINAL_OUTPUT_CHUNK_SIZE = 96
-_GROUNDING_MAX_TOOL_OUTPUTS = 12
-_GROUNDING_MAX_TOOL_OUTPUT_CHARS = 64_000
-_GROUNDING_READ_FILING_OUTPUT_CHARS = 160_000
-_GROUNDING_TIMEOUT_SECONDS = 60.0
+_GROUNDING_MAX_TOOL_OUTPUTS = _EXECUTION_PROFILE.grounding_max_tool_outputs
+_GROUNDING_MAX_TOOL_OUTPUT_CHARS = _EXECUTION_PROFILE.grounding_max_tool_output_chars
+_GROUNDING_READ_FILING_OUTPUT_CHARS = _EXECUTION_PROFILE.grounding_read_filing_output_chars
+_GROUNDING_TIMEOUT_SECONDS = _EXECUTION_PROFILE.grounding_timeout_seconds
 _INITIAL_PROGRESS = "planning the analysis"
 _RETRY_PROGRESS = "retrying the analysis"
 _TOOL_OUTPUT_PROGRESS = "analyzing the retrieved data"
@@ -300,39 +306,11 @@ def _extract_tool_output(item: object) -> str:
 
 
 def _tool_guidance_messages(request: ChatRequest) -> list[dict[str, str]]:
-    """Inject narrow hidden guidance for prompts that need exact tool parameters."""
-    lowered_message = request.message.lower()
-    guidance_messages: list[dict[str, str]] = []
-
-    if "proxy statement" in lowered_message and any(
-        keyword in lowered_message for keyword in ["recent", "latest"]
-    ):
-        guidance_messages.append(
-            {
-                "role": "user",
-                "content": (
-                    "[Tool guidance: For recent/latest proxy questions, call "
-                    "get_proxy_statement_data with limit=1 and do not set start_date "
-                    "or end_date unless the user explicitly asked for a historical range. "
-                    "Use the newest filing returned.]"
-                ),
-            }
-        )
-
-    if ("13f" in lowered_message or "top holdings" in lowered_message) and any(
-        keyword in lowered_message for keyword in ["latest", "recent", "concentrated", "concentration"]
-    ):
-        guidance = (
-            "[Tool guidance: For latest 13F holdings questions, prefer "
-            "summarize_institutional_holdings and do not set report_period or end_date "
-            "unless the user explicitly asked for a historical filing. Use the manager "
-            "or filer named in the question, or the current ticker if the user is asking "
-            "about the company currently in view."
-        )
-        guidance += "]"
-        guidance_messages.append({"role": "user", "content": guidance})
-
-    return guidance_messages
+    """Compatibility wrapper for explicit query normalization context."""
+    return normalize_research_query(
+        request.message,
+        ticker=request.ticker,
+    ).context_messages
 
 
 def _compact_material_event_summary(summary: str, limit: int = 160) -> str:
@@ -345,10 +323,7 @@ def _compact_material_event_summary(summary: str, limit: int = 160) -> str:
 
 def _parse_material_event_rows(output: str) -> list[dict[str, str]]:
     """Parse structured 8-K event rows from a tool output payload."""
-    try:
-        payload = json.loads(output)
-    except json.JSONDecodeError:
-        return []
+    payload = _parse_json_payload(output)
 
     if not isinstance(payload, list):
         return []
@@ -447,9 +422,12 @@ def _extract_material_event_title(row: dict[str, str]) -> str:
 def _parse_json_payload(output: str) -> Any | None:
     """Parse a JSON tool payload, returning None on decode failure."""
     try:
-        return json.loads(output)
+        payload = json.loads(output)
     except json.JSONDecodeError:
         return None
+    if isinstance(payload, dict) and "data" in payload and "validation" in payload:
+        return payload.get("data")
+    return payload
 
 
 def _parse_proxy_records(output: str) -> list[dict[str, Any]]:
@@ -630,6 +608,15 @@ def _format_period_label(period_end: str) -> str:
         return datetime.fromisoformat(period_end).strftime("%b %Y")
     except ValueError:
         return period_end
+
+
+def _format_long_period_end(period_end: str) -> str:
+    """Format an ISO period end into a full readable date."""
+    try:
+        parsed = datetime.fromisoformat(period_end)
+    except ValueError:
+        return period_end
+    return f"{parsed.strftime('%B')} {parsed.day}, {parsed.year}"
 
 
 def _latest_metric_row(
@@ -894,6 +881,70 @@ def _render_filing_section_comparison_answer(comparison: dict[str, Any]) -> str 
     )
 
 
+def _latest_proxy_record(records: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Return the latest proxy filing record from a list of snapshots."""
+    if not records:
+        return None
+    return max(
+        records,
+        key=lambda record: (
+            str(record.get("filing_date") or ""),
+            str(record.get("accession_number") or ""),
+        ),
+    )
+
+
+def _render_proxy_snapshot_answer(latest: dict[str, Any]) -> str | None:
+    """Render a grounded answer for one proxy-statement snapshot."""
+    if not latest:
+        return None
+
+    pay_vs_performance = latest.get("pay_vs_performance") or []
+    if not isinstance(pay_vs_performance, list):
+        pay_vs_performance = []
+    pay_vs_performance = sorted(
+        [row for row in pay_vs_performance if isinstance(row, dict)],
+        key=lambda row: str(row.get("fiscal_year_end") or ""),
+    )
+
+    measures = latest.get("performance_measures") or []
+    if not isinstance(measures, list):
+        measures = []
+    normalized_measures = [
+        " ".join(str(measure).split())
+        for measure in measures
+        if str(measure).strip()
+    ]
+
+    lines = [
+        f"The most recent retrieved proxy snapshot was filed {latest.get('filing_date')} "
+        f"(DEF 14A; accession {latest.get('accession_number')}).",
+        "",
+        "CEO compensation:",
+        f"- PEO: {latest.get('peo_name') or 'N/A'}",
+        f"- Total compensation: {_format_money(latest.get('peo_total_comp'))}",
+        f"- Actually paid compensation: {_format_money(latest.get('peo_actually_paid_comp'))}",
+        f"- Average non-PEO NEO total compensation: {_format_money(latest.get('neo_avg_total_comp'))}",
+        f"- Average non-PEO NEO actually paid compensation: {_format_money(latest.get('neo_avg_actually_paid_comp'))}",
+        "",
+        "Pay-versus-performance:",
+        f"- Measures listed: {', '.join(normalized_measures) or 'N/A'}",
+    ]
+
+    for row in pay_vs_performance:
+        lines.append(
+            "- "
+            f"{row.get('fiscal_year_end')}: CEO actually paid {_format_money(row.get('peo_actually_paid_comp'))}, "
+            f"company TSR {_format_percent(row.get('total_shareholder_return'))}, "
+            f"peer group TSR {_format_percent(row.get('peer_group_tsr'))}, "
+            f"net income {_format_money(row.get('net_income'))}, "
+            f"{latest.get('company_selected_measure') or 'company-selected measure'} "
+            f"{_format_money(row.get('company_selected_measure_value'))}."
+        )
+
+    return "\n".join(lines)
+
+
 def _select_primary_issuer_beneficial_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Prefer rows for the predominant issuer when a filer history mixes issuers."""
     issuer_counts: dict[str, int] = {}
@@ -946,6 +997,120 @@ def _render_beneficial_ownership_history_answer(
     return "\n".join(lines) if len(lines) > 1 else None
 
 
+def _render_beneficial_ownership_snapshot_answer(
+    ticker: str | None,
+    summary: dict[str, Any],
+) -> str | None:
+    """Render a grounded answer for the latest beneficial ownership snapshot."""
+    if not summary:
+        return None
+
+    filing_date = str(summary.get("latest_filing_date") or "").strip()
+    accession_number = str(summary.get("latest_accession_number") or "").strip()
+    if not filing_date or not accession_number:
+        return None
+
+    issuer_name = summary.get("issuer_name") or ticker or "The company"
+    form_type = str(summary.get("latest_form_type") or "beneficial ownership filing").strip()
+    filer_names = [
+        str(name).strip()
+        for name in (summary.get("latest_reporting_person_names") or [])
+        if str(name).strip()
+    ]
+    filer_label = ", ".join(filer_names) or "N/A"
+    ownership_percent = summary.get("latest_total_percent")
+    passive_flag = summary.get("latest_is_passive_investor")
+    rule_designation = str(summary.get("latest_rule_designation") or "").strip()
+
+    if passive_flag is True:
+        stance = "Passive"
+        if rule_designation:
+            stance = f"Passive ({rule_designation})"
+    elif passive_flag is False:
+        stance = "Activist"
+    else:
+        stance = "Not clear from the retrieved filing"
+
+    return "\n".join(
+        [
+            f"{issuer_name}'s latest beneficial ownership filing was {form_type} filed {filing_date} (accession {accession_number}).",
+            f"- Filer: {filer_label}",
+            f"- Reported ownership percentage: {_format_compact_percent(ownership_percent)}",
+            f"- Passive or activist: {stance}.",
+        ]
+    )
+
+
+def _render_bull_bear_quarterly_and_ttm_answer(
+    request: ChatRequest,
+    quarterly_rows: list[dict[str, Any]],
+    ttm_payload: dict[str, Any],
+) -> str | None:
+    """Render bull and bear datapoints without inventing unavailable quarterly cash flow."""
+    revenue_row = next(
+        (row for row in quarterly_rows if row.get("metric_type") == "revenue"),
+        None,
+    )
+    net_income_row = next(
+        (row for row in quarterly_rows if row.get("metric_type") == "net_income"),
+        None,
+    )
+    if revenue_row is None or net_income_row is None:
+        return None
+
+    revenue_series = _extract_quarter_series(revenue_row)[:8]
+    net_income_by_period = {
+        item["period_end"]: item["value"]
+        for item in _extract_quarter_series(net_income_row)
+    }
+    margin_series: list[dict[str, Any]] = []
+    for item in revenue_series:
+        revenue_value = float(item["value"])
+        net_income_value = net_income_by_period.get(item["period_end"])
+        if revenue_value and net_income_value is not None:
+            margin_series.append(
+                {
+                    "period_end": item["period_end"],
+                    "revenue": revenue_value,
+                    "net_income": float(net_income_value),
+                    "net_margin": float(net_income_value) / revenue_value,
+                }
+            )
+    if not margin_series:
+        return None
+
+    strongest_quarter = max(
+        margin_series,
+        key=lambda item: (item["net_margin"], item["period_end"]),
+    )
+    bull_line = (
+        "Bull datapoint: "
+        f"Quarter ended {_format_long_period_end(strongest_quarter['period_end'])} generated "
+        f"{_format_money(strongest_quarter['net_income'])} of net income on "
+        f"{_format_money(strongest_quarter['revenue'])} of revenue, "
+        f"a {_format_percent(strongest_quarter['net_margin'] * 100.0)} net margin."
+    )
+
+    ttm_fcf = ttm_payload.get("free_cash_flow")
+    if ttm_fcf is not None and float(ttm_fcf) < 0:
+        bear_line = (
+            "Bear datapoint: "
+            f"Latest trailing-twelve-month free cash flow was {_format_money(ttm_fcf)}."
+        )
+    else:
+        weakest_quarter = min(
+            margin_series,
+            key=lambda item: (item["net_margin"], item["period_end"]),
+        )
+        bear_line = (
+            "Bear datapoint: "
+            f"Quarter ended {_format_long_period_end(weakest_quarter['period_end'])} had the weakest "
+            f"net margin in the retrieved window at {_format_percent(weakest_quarter['net_margin'] * 100.0)}."
+        )
+
+    return "\n".join([bull_line, bear_line])
+
+
 def _render_quarterly_trend_and_ttm_answer(
     request: ChatRequest,
     quarterly_rows: list[dict[str, Any]],
@@ -960,7 +1125,7 @@ def _render_quarterly_trend_and_ttm_answer(
         (row for row in quarterly_rows if row.get("metric_type") == "net_income"),
         None,
     )
-    if not revenue_row:
+    if revenue_row is None:
         return None
 
     revenue_series = _extract_quarter_series(revenue_row)[:8]
@@ -1011,6 +1176,49 @@ def _render_quarterly_trend_and_ttm_answer(
         f"{revenue_text}.\n"
         f"Latest trailing-twelve-month free cash flow was {_format_money(ttm_fcf)}.\n"
         f"{margin_sentence}"
+    )
+
+
+def _render_ttm_revenue_net_income_answer(
+    request: ChatRequest,
+    ttm_payload: dict[str, Any],
+) -> str | None:
+    """Render a grounded answer for simple TTM revenue and net income prompts."""
+    revenue_value = ttm_payload.get("revenue")
+    net_income_value = ttm_payload.get("net_income")
+    if revenue_value is None or net_income_value is None:
+        return None
+
+    revenue = float(revenue_value)
+    net_income = float(net_income_value)
+    if revenue == 0:
+        margin = None
+    else:
+        margin = net_income / revenue
+    company_label = request.ticker or "The company"
+    lines = [
+        f"{company_label}'s latest trailing-twelve-month revenue was {_format_money(revenue)}.",
+        f"{company_label}'s latest trailing-twelve-month net income was {_format_money(net_income)}.",
+    ]
+    if margin is not None:
+        lines.append(
+            "Short interpretation: net income was "
+            f"{_format_percent(margin * 100.0)} of trailing-twelve-month revenue."
+        )
+    return "\n".join(lines)
+
+
+def _is_bull_bear_quarterly_prompt(lowered_message: str) -> bool:
+    """Detect a prompt asking for one bull and one bear datapoint."""
+    return "bull datapoint" in lowered_message and "bear datapoint" in lowered_message
+
+
+def _is_quarterly_trend_and_ttm_prompt(lowered_message: str) -> bool:
+    """Detect a prompt asking for quarterly trend plus TTM free cash flow."""
+    return (
+        "revenue trend" in lowered_message
+        and "margin picture" in lowered_message
+        and "free cash flow" in lowered_message
     )
 
 
@@ -1295,6 +1503,64 @@ async def _try_direct_answer(request: ChatRequest) -> tuple[list[str], str] | No
         if answer:
             return (["retrieving cash flow data"], answer)
 
+    if (
+        ticker
+        and ("trailing-twelve-month" in lowered_message or "ttm" in lowered_message)
+        and "revenue" in lowered_message
+        and "net income" in lowered_message
+    ):
+        ttm_payload = await asyncio.to_thread(analytics_ttm_metrics, ticker, ["revenue", "net_income"])
+        answer = _render_ttm_revenue_net_income_answer(request, ttm_payload)
+        if answer:
+            return (["computing trailing-twelve-month metrics"], answer)
+
+    if ticker and _is_bull_bear_quarterly_prompt(lowered_message):
+        quarterly_df, ttm_payload = await asyncio.gather(
+            asyncio.to_thread(analytics_quarterly_detail, ticker, ["revenue", "net_income"], 8),
+            asyncio.to_thread(analytics_ttm_metrics, ticker, ["free_cash_flow"]),
+        )
+        answer = _render_bull_bear_quarterly_and_ttm_answer(
+            request,
+            _dataframe_records_with_index(quarterly_df),
+            ttm_payload,
+        )
+        if answer:
+            return (["analyzing quarterly financials", "computing trailing-twelve-month metrics"], answer)
+
+    if ticker and _is_quarterly_trend_and_ttm_prompt(lowered_message):
+        quarterly_df, ttm_payload = await asyncio.gather(
+            asyncio.to_thread(analytics_quarterly_detail, ticker, ["revenue", "net_income"], 8),
+            asyncio.to_thread(analytics_ttm_metrics, ticker, ["free_cash_flow"]),
+        )
+        answer = _render_quarterly_trend_and_ttm_answer(
+            request,
+            _dataframe_records_with_index(quarterly_df),
+            ttm_payload,
+        )
+        if answer:
+            return (["analyzing quarterly financials", "computing trailing-twelve-month metrics"], answer)
+
+    if (
+        ticker
+        and "proxy" in lowered_message
+        and "insider" not in lowered_message
+        and (
+            "compensation" in lowered_message
+            or "pay-versus-performance" in lowered_message
+        )
+    ):
+        proxy_rows = await asyncio.to_thread(
+            analytics_get_proxy_statement_data,
+            ticker,
+            None,
+            None,
+            1,
+        )
+        latest_proxy = _latest_proxy_record(proxy_rows)
+        answer = _render_proxy_snapshot_answer(latest_proxy) if latest_proxy else None
+        if answer:
+            return (["analyzing proxy statements"], answer)
+
     if ticker and "insider" in lowered_message and "proxy" in lowered_message:
         requested_start_date = _extract_first_iso_date(request.message) or (
             date.today() - timedelta(days=365)
@@ -1315,6 +1581,29 @@ async def _try_direct_answer(request: ChatRequest) -> tuple[list[str], str] | No
         answer = _render_recent_insider_proxy_answer(request, insider_rows, proxy_rows)
         if answer:
             return (["analyzing insider trades", "analyzing proxy statements"], answer)
+
+    if (
+        ticker
+        and "beneficial ownership" in lowered_message
+        and "filings" not in lowered_message
+        and any(
+            token in lowered_message
+            for token in ["filer", "ownership percentage", "passive", "activist", "latest"]
+        )
+    ):
+        summary = await asyncio.to_thread(
+            analytics_summarize_beneficial_ownership,
+            ticker,
+            None,
+            10,
+            None,
+            None,
+            True,
+            2_000,
+        )
+        answer = _render_beneficial_ownership_snapshot_answer(ticker, summary)
+        if answer:
+            return (["summarizing beneficial ownership filings"], answer)
 
     if ticker and "8-k" in lowered_message and "material events" in lowered_message:
         start_date = _extract_first_iso_date(request.message) or (
@@ -1410,7 +1699,7 @@ async def _try_direct_answer(request: ChatRequest) -> tuple[list[str], str] | No
         )
         answer = _render_quarterly_trend_and_ttm_answer(
             request,
-            sec_dataframe_records(quarterly_df),
+            _dataframe_records_with_index(quarterly_df),
             ttm_payload,
         )
         if answer:
@@ -1561,52 +1850,8 @@ def _render_proxy_statement_answer(
         if observation.get("tool_name") != "get_proxy_statement_data":
             continue
         records.extend(_parse_proxy_records(observation.get("output", "")))
-    if not records:
-        return None
-
-    latest = max(
-        records,
-        key=lambda record: (
-            str(record.get("filing_date") or ""),
-            str(record.get("accession_number") or ""),
-        ),
-    )
-    pay_vs_performance = latest.get("pay_vs_performance") or []
-    if not isinstance(pay_vs_performance, list):
-        pay_vs_performance = []
-    measures = latest.get("performance_measures") or []
-    if not isinstance(measures, list):
-        measures = []
-
-    lines = [
-        f"The most recent retrieved proxy snapshot was filed {latest.get('filing_date')} "
-        f"(DEF 14A; accession {latest.get('accession_number')}).",
-        "",
-        "CEO compensation:",
-        f"- PEO: {latest.get('peo_name') or 'N/A'}",
-        f"- Total compensation: {_format_money(latest.get('peo_total_comp'))}",
-        f"- Actually paid compensation: {_format_money(latest.get('peo_actually_paid_comp'))}",
-        f"- Average non-PEO NEO total compensation: {_format_money(latest.get('neo_avg_total_comp'))}",
-        f"- Average non-PEO NEO actually paid compensation: {_format_money(latest.get('neo_avg_actually_paid_comp'))}",
-        "",
-        "Pay-versus-performance:",
-        f"- Measures listed: {', '.join(str(measure).strip() for measure in measures if str(measure).strip()) or 'N/A'}",
-    ]
-
-    for row in pay_vs_performance:
-        if not isinstance(row, dict):
-            continue
-        lines.append(
-            "- "
-            f"{row.get('fiscal_year_end')}: CEO actually paid {_format_money(row.get('peo_actually_paid_comp'))}, "
-            f"company TSR {_format_percent(row.get('total_shareholder_return'))}, "
-            f"peer group TSR {_format_percent(row.get('peer_group_tsr'))}, "
-            f"net income {_format_money(row.get('net_income'))}, "
-            f"{latest.get('company_selected_measure') or 'company-selected measure'} "
-            f"{_format_money(row.get('company_selected_measure_value'))}."
-        )
-
-    return "\n".join(lines)
+    latest = _latest_proxy_record(records)
+    return _render_proxy_snapshot_answer(latest) if latest else None
 
 
 def _render_institutional_holdings_answer(
@@ -1896,28 +2141,26 @@ async def handle_chat(request: ChatRequest) -> StreamingResponse:
     The agent decides which tools to call, executes them, then streams
     the final textual answer token-by-token.
     """
-    # Build the input message list for the agent
+    # Build the input message list for the agent.
     input_items: list[dict[str, str]] = []
 
-    # Inject ticker hint so the agent knows the context without a tool call
     if request.ticker:
         ticker = request.ticker.upper()
-        input_items.append({
-            "role": "user",
-            "content": (
-                f"[Context: the user is currently viewing the company page "
-                f"for {ticker}. Use this ticker when they refer to "
-                f"'this company' or 'the company'.]"
-            ),
-        })
+        input_items.append(
+            {
+                "role": "user",
+                "content": (
+                    f"[Context: the user is currently viewing the company page "
+                    f"for {ticker}. Use this ticker when they refer to "
+                    f"'this company' or 'the company'.]"
+                ),
+            }
+        )
 
-    # Conversation history
     for msg in request.history:
         input_items.append({"role": msg.role, "content": msg.content})
 
     input_items.extend(_tool_guidance_messages(request))
-
-    # Current user message
     input_items.append({"role": "user", "content": request.message})
 
     async def event_generator():
@@ -1930,94 +2173,46 @@ async def handle_chat(request: ChatRequest) -> StreamingResponse:
             source=request.source,
         ) as trace_span:
             try:
-                last_progress: str | None = None
-                current_tool_name: str | None = None
+                progress_queue: asyncio.Queue[str] = asyncio.Queue()
 
-                def emit_progress(message: str):
-                    nonlocal last_progress
-                    if message and message != last_progress:
-                        last_progress = message
-                        progress_messages.append(message)
-                        return _sse_payload({"progress": message})
-                    return None
+                async def queue_progress(message: str) -> None:
+                    await progress_queue.put(message)
 
-                direct_answer = await _try_direct_answer(request)
-                if direct_answer is not None:
-                    direct_progress_messages, direct_text = direct_answer
-                    for message in direct_progress_messages:
-                        progress_update = emit_progress(message)
-                        if progress_update:
-                            yield progress_update
-                    final_progress = emit_progress(_FINAL_PROGRESS)
-                    if final_progress and direct_text:
-                        yield final_progress
-                    update_chat_trace(
-                        trace_span,
-                        output={"answer": direct_text},
-                        status="ok",
-                        progress_count=len(progress_messages),
-                    )
-                    for sse_chunk in _stream_text_as_sse(direct_text):
-                        yield sse_chunk
-                    yield "data: [DONE]\n\n"
-                    return
-
-                agent = build_agent()
-                run_inputs = list(input_items)
-                final_text = ""
-                for attempt in range(2):
-                    tool_observations: list[dict[str, str]] = []
-                    current_tool_name = None
-                    result = Runner.run_streamed(
-                        agent,
-                        input=run_inputs,
+                execution_task = asyncio.create_task(
+                    execute_research_request(
+                        request,
+                        input_items=list(input_items),
+                        build_agent_fn=build_agent,
+                        try_direct_answer_fn=_try_direct_answer,
+                        ground_final_output_fn=_ground_final_output,
+                        serialize_final_output_fn=_serialize_final_output,
+                        run_streamed_fn=Runner.run_streamed,
+                        tool_name_from_item_fn=_tool_name_from_item,
+                        extract_tool_output_fn=_extract_tool_output,
+                        progress_message_for_tool_fn=_progress_message_for_tool,
                         max_turns=_MAX_TURNS,
+                        grounding_max_tool_outputs=_GROUNDING_MAX_TOOL_OUTPUTS,
+                        initial_progress=_INITIAL_PROGRESS,
+                        retry_progress=_RETRY_PROGRESS,
+                        tool_output_progress=_TOOL_OUTPUT_PROGRESS,
+                        final_progress=_FINAL_PROGRESS,
+                        blank_final_retry_instruction=_BLANK_FINAL_RETRY_INSTRUCTION,
+                        progress_handler=queue_progress,
                     )
-                    attempt_progress = emit_progress(
-                        _INITIAL_PROGRESS if attempt == 0 else _RETRY_PROGRESS
-                    )
-                    if attempt_progress:
-                        yield attempt_progress
+                )
 
-                    # Consume the full agent run first. Raw stream events include interim
-                    # planning text and tool-call chatter, which should not be exposed to
-                    # the user-facing chat UI.
-                    async for event in result.stream_events():
-                        if isinstance(event, RunItemStreamEvent):
-                            progress_update = None
-                            if event.name == "tool_called":
-                                tool_name = _tool_name_from_item(event.item)
-                                current_tool_name = tool_name
-                                progress_update = emit_progress(_progress_message_for_tool(tool_name))
-                            elif event.name == "tool_output":
-                                tool_output = _extract_tool_output(event.item).strip()
-                                if tool_output:
-                                    tool_observations.append(
-                                        {
-                                            "tool_name": current_tool_name or "unknown_tool",
-                                            "output": tool_output,
-                                        }
-                                    )
-                                    if len(tool_observations) > _GROUNDING_MAX_TOOL_OUTPUTS:
-                                        tool_observations = tool_observations[-_GROUNDING_MAX_TOOL_OUTPUTS:]
-                                progress_update = emit_progress(_TOOL_OUTPUT_PROGRESS)
+                while not execution_task.done() or not progress_queue.empty():
+                    try:
+                        progress_message = await asyncio.wait_for(progress_queue.get(), timeout=0.05)
+                    except asyncio.TimeoutError:
+                        if execution_task.done():
+                            break
+                        continue
+                    progress_messages.append(progress_message)
+                    yield _sse_payload({"progress": progress_message})
 
-                            if progress_update:
-                                yield progress_update
-
-                    final_text = _serialize_final_output(result.final_output)
-                    final_text = await _ground_final_output(
-                        request.message,
-                        final_text,
-                        tool_observations,
-                    )
-                    final_text = final_text.strip()
-                    if final_text:
-                        break
-                    if attempt == 0:
-                        run_inputs = list(input_items) + [
-                            {"role": "user", "content": _BLANK_FINAL_RETRY_INSTRUCTION}
-                        ]
+                execution_result = await execution_task
+                final_text = execution_result.final_text
 
                 update_chat_trace(
                     trace_span,
@@ -2025,9 +2220,6 @@ async def handle_chat(request: ChatRequest) -> StreamingResponse:
                     status="ok",
                     progress_count=len(progress_messages),
                 )
-                final_progress = emit_progress(_FINAL_PROGRESS)
-                if final_progress and final_text:
-                    yield final_progress
                 for sse_chunk in _stream_text_as_sse(final_text):
                     yield sse_chunk
                 yield "data: [DONE]\n\n"

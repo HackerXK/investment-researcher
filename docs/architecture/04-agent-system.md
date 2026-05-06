@@ -1,5 +1,15 @@
 # Multi-Agent System Architecture
 
+## Current Implementation Priorities
+
+The current repository direction is accuracy-first, local-LLM, and backend-first.
+
+- Accuracy first: agent behavior should favor explicit evidence retrieval, structured tool outputs, provenance, and validation over speed or prompt minimalism.
+- Local-LLM first: assume an OpenAI-compatible local model endpoint is the primary runtime for chat and evaluation.
+- Backend first: the production value is in ingestion, analytics, SEC retrieval, and evaluation; the frontend is a demonstration layer for those capabilities.
+
+Where this document describes broader multi-agent or future-state orchestration ideas, prefer the implemented backend contracts in `src/investment_researcher/web/`, `src/investment_researcher/analytics/`, and the evaluation harness when making near-term code changes.
+
 ## Overview
 
 The agent system uses the **OpenAI Agents SDK** as the outer orchestration layer. Six specialized agents collaborate via handoffs to continuously scan for investment opportunities and respond to ad-hoc queries. The agents have access to a comprehensive knowledge graph that spans company data, macroeconomic indicators, Congressional investment disclosures, institutional holdings, government contracts, legislation, and country-level economic profiles. GraphRAG-SDK’s `KnowledgeGraph.chat_session()` is exposed as a tool to agents for natural language → Cypher queries.

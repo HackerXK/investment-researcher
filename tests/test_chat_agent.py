@@ -857,7 +857,66 @@ def test_read_filing_can_return_full_text_when_truncation_disabled(monkeypatch):
         )
     )
 
-    assert result == filing_text
+    payload = json.loads(result)
+
+    assert payload["validation"]["ok"] is True
+    assert payload["data"]["content"] == filing_text
+    assert payload["data"]["truncated"] is False
+    assert payload["metadata"]["tool_name"] == "read_filing"
+
+
+def test_get_ticker_summary_returns_empty_data_for_unknown_ticker():
+    result = asyncio.run(
+        get_ticker_summary.on_invoke_tool(
+            SimpleNamespace(tool_name="get_ticker_summary"),
+            json.dumps({"ticker": "NOTREAL", "period_type": "annual"}),
+        )
+    )
+
+    parsed = json.loads(result)
+
+    assert parsed["validation"]["ok"] is True
+    assert parsed["data"] == []
+    assert parsed["metadata"]["requested_ticker"] == "NOTREAL"
+
+
+def test_resolve_ticker_request_uses_punctuation_normalization_and_runtime_search(monkeypatch):
+    monkeypatch.setattr(agent_tools_module, "get_all_tickers", lambda: ["BRK-B", "META"])
+    monkeypatch.setattr(
+        agent_tools_module,
+        "_find_company_ticker_candidates",
+        lambda query, limit=5: ["META"] if query == "Meta Platforms" else [],
+    )
+
+    resolved_ticker, metadata, issues = agent_tools_module._resolve_ticker_request("BRK.B")
+    assert issues == []
+    assert resolved_ticker == "BRK-B"
+    assert metadata["ticker_match_exact"] is True
+
+    resolved_ticker, metadata, issues = agent_tools_module._resolve_ticker_request("Meta Platforms")
+    assert issues == []
+    assert resolved_ticker == "META"
+    assert metadata["ticker_candidates"] == ["META"]
+
+
+def test_get_insider_trades_returns_empty_data_for_reversed_date_range():
+    result = asyncio.run(
+        get_insider_trades.on_invoke_tool(
+            SimpleNamespace(tool_name="get_insider_trades"),
+            json.dumps(
+                {
+                    "ticker": "AAPL",
+                    "start_date": "2026-12-31",
+                    "end_date": "2026-01-01",
+                }
+            ),
+        )
+    )
+
+    parsed = json.loads(result)
+
+    assert parsed["validation"]["ok"] is True
+    assert parsed["data"] == []
 
 
 def test_render_material_event_answer_covers_full_range_without_extra_names():
@@ -987,6 +1046,69 @@ def test_render_proxy_statement_answer_uses_latest_snapshot_values():
     assert "Total compensation: $74.29M" in answer
     assert "Apple's most recent retrieved proxy snapshot" not in answer
     assert "peer group TSR 279.51%" in answer
+
+
+def test_render_proxy_statement_answer_prefers_latest_snapshot_across_multiple_records():
+    answer = chat_module._render_proxy_statement_answer(
+        "From Apple's recent proxy statement, what does it report about CEO compensation and pay-versus-performance?",
+        [
+            {
+                "tool_name": "get_proxy_statement_data",
+                "output": json.dumps(
+                    [
+                        {
+                            "accession_number": "0001308179-25-000008",
+                            "filing_date": "2025-01-10",
+                            "peo_name": "Mr. Cook",
+                            "peo_total_comp": 74609802,
+                            "peo_actually_paid_comp": 168980568,
+                            "neo_avg_total_comp": 27178896,
+                            "neo_avg_actually_paid_comp": 58633525,
+                            "company_selected_measure": "Net Sales",
+                            "performance_measures": ["Net Sales", "Operating Income", "Relative TSR"],
+                            "pay_vs_performance": [
+                                {
+                                    "fiscal_year_end": "2024-09-28",
+                                    "peo_actually_paid_comp": 168980568,
+                                    "total_shareholder_return": 207.59,
+                                    "peer_group_tsr": 206.32,
+                                    "net_income": 93736000000,
+                                    "company_selected_measure_value": 391035000000,
+                                }
+                            ],
+                        },
+                        {
+                            "accession_number": "0001308179-26-000008",
+                            "filing_date": "2026-01-08",
+                            "peo_name": "Mr. Cook",
+                            "peo_total_comp": 74294811,
+                            "peo_actually_paid_comp": 108423733,
+                            "neo_avg_total_comp": 23812358,
+                            "neo_avg_actually_paid_comp": 34125743,
+                            "company_selected_measure": "Net Sales",
+                            "performance_measures": ["Net Sales", "Operating Income", "Relative TSR"],
+                            "pay_vs_performance": [
+                                {
+                                    "fiscal_year_end": "2025-09-27",
+                                    "peo_actually_paid_comp": 108423733,
+                                    "total_shareholder_return": 233.88,
+                                    "peer_group_tsr": 279.51,
+                                    "net_income": 112010000000,
+                                    "company_selected_measure_value": 416161000000,
+                                }
+                            ],
+                        },
+                    ]
+                ),
+            }
+        ],
+    )
+
+    assert answer is not None
+    assert "filed 2026-01-08" in answer
+    assert "accession 0001308179-26-000008" in answer
+    assert "Actually paid compensation: $108.42M" in answer
+    assert "2025-01-10" not in answer.splitlines()[0]
 
 
 def test_render_institutional_holdings_answer_uses_summary_payload():
@@ -1184,6 +1306,74 @@ async def test_try_direct_answer_handles_meta_insider_and_proxy(monkeypatch):
     assert "Meta Platforms, Inc.'s latest retrieved proxy was filed 2026-04-16" in answer
     assert "CEO: Mark Zuckerberg" in answer
     assert "Total compensation: $25.13M" in answer
+
+
+@pytest.mark.asyncio
+async def test_try_direct_answer_handles_latest_proxy_statement_snapshot(monkeypatch):
+    monkeypatch.setattr(
+        chat_module,
+        "analytics_get_proxy_statement_data",
+        lambda *args, **kwargs: [
+            {
+                "accession_number": "0001308179-25-000008",
+                "filing_date": "2025-01-10",
+                "peo_name": "Mr. Cook",
+                "peo_total_comp": 74609802,
+                "peo_actually_paid_comp": 168980568,
+                "neo_avg_total_comp": 27178896,
+                "neo_avg_actually_paid_comp": 58633525,
+                "company_selected_measure": "Net Sales",
+                "performance_measures": ["Net Sales", "Operating Income", "Relative TSR"],
+                "pay_vs_performance": [
+                    {
+                        "fiscal_year_end": "2024-09-28",
+                        "peo_actually_paid_comp": 168980568,
+                        "total_shareholder_return": 207.59,
+                        "peer_group_tsr": 206.32,
+                        "net_income": 93736000000,
+                        "company_selected_measure_value": 391035000000,
+                    }
+                ],
+            },
+            {
+                "accession_number": "0001308179-26-000008",
+                "filing_date": "2026-01-08",
+                "peo_name": "Mr. Cook",
+                "peo_total_comp": 74294811,
+                "peo_actually_paid_comp": 108423733,
+                "neo_avg_total_comp": 23812358,
+                "neo_avg_actually_paid_comp": 34125743,
+                "company_selected_measure": "Net Sales",
+                "performance_measures": ["Net Sales", "Operating Income", "Relative TSR"],
+                "pay_vs_performance": [
+                    {
+                        "fiscal_year_end": "2025-09-27",
+                        "peo_actually_paid_comp": 108423733,
+                        "total_shareholder_return": 233.88,
+                        "peer_group_tsr": 279.51,
+                        "net_income": 112010000000,
+                        "company_selected_measure_value": 416161000000,
+                    }
+                ],
+            },
+        ],
+    )
+
+    result = await chat_module._try_direct_answer(
+        ChatRequest(
+            message="From Apple's recent proxy statement, what does it report about CEO compensation and pay-versus-performance?",
+            ticker="AAPL",
+        )
+    )
+
+    assert result is not None
+    progress_messages, answer = result
+    assert progress_messages == ["analyzing proxy statements"]
+    assert "filed 2026-01-08" in answer
+    assert "accession 0001308179-26-000008" in answer
+    assert "Actually paid compensation: $108.42M" in answer
+    assert "peer group TSR 279.51%" in answer
+    assert "0001308179-25-000008" not in answer
 
 
 @pytest.mark.asyncio
@@ -1416,7 +1606,7 @@ async def test_handle_chat_uses_direct_13f_answer_without_agent(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_try_direct_answer_handles_amzn_quarterly_trend_and_ttm(monkeypatch):
+async def test_try_direct_answer_handles_quarterly_trend_and_ttm(monkeypatch):
     monkeypatch.setattr(
         chat_module,
         "analytics_quarterly_detail",
@@ -1456,10 +1646,10 @@ async def test_try_direct_answer_handles_amzn_quarterly_trend_and_ttm(monkeypatc
     result = await chat_module._try_direct_answer(
         ChatRequest(
             message=(
-                "Using the last eight quarters, describe Amazon's revenue trend and latest "
+                "Using the last eight quarters, describe this company's revenue trend and latest "
                 "trailing-twelve-month free cash flow, and tell me whether the margin picture is improving."
             ),
-            ticker="AMZN",
+            ticker="MSFT",
         )
     )
 
@@ -1470,6 +1660,87 @@ async def test_try_direct_answer_handles_amzn_quarterly_trend_and_ttm(monkeypatc
     assert "Dec 2025 $213.39B" in answer
     assert "Latest trailing-twelve-month free cash flow was $7.70B" in answer
     assert "quarterly net margin moved from 7.28% in Mar 2024 to 9.93% in Dec 2025" in answer
+
+
+@pytest.mark.asyncio
+async def test_try_direct_answer_handles_bull_bear_without_quarterly_fcf_fabrication(monkeypatch):
+    monkeypatch.setattr(
+        chat_module,
+        "analytics_quarterly_detail",
+        lambda *args, **kwargs: pd.DataFrame(
+            [
+                {
+                    "metric_type": "revenue",
+                    "Quarter Ended 03/31/2026": 181_519_000_000.0,
+                    "Quarter Ended 12/31/2025": 213_386_000_000.0,
+                    "Quarter Ended 09/30/2025": 180_169_000_000.0,
+                    "Quarter Ended 06/30/2025": 167_702_000_000.0,
+                    "Quarter Ended 03/31/2025": 155_667_000_000.0,
+                    "Quarter Ended 12/31/2024": 187_792_000_000.0,
+                    "Quarter Ended 09/30/2024": 158_877_000_000.0,
+                    "Quarter Ended 06/30/2024": 147_977_000_000.0,
+                },
+                {
+                    "metric_type": "net_income",
+                    "Quarter Ended 03/31/2026": 30_255_000_000.0,
+                    "Quarter Ended 12/31/2025": 21_192_000_000.0,
+                    "Quarter Ended 09/30/2025": 21_187_000_000.0,
+                    "Quarter Ended 06/30/2025": 18_164_000_000.0,
+                    "Quarter Ended 03/31/2025": 17_127_000_000.0,
+                    "Quarter Ended 12/31/2024": 20_004_000_000.0,
+                    "Quarter Ended 09/30/2024": 15_328_000_000.0,
+                    "Quarter Ended 06/30/2024": 13_485_000_000.0,
+                },
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        chat_module,
+        "analytics_ttm_metrics",
+        lambda *args, **kwargs: {"free_cash_flow": -2_472_000_000.0},
+    )
+
+    result = await chat_module._try_direct_answer(
+        ChatRequest(
+            message=(
+                "Using this company's last eight quarters plus its latest trailing-twelve-month free cash flow, "
+                "give one bull datapoint and one bear datapoint. Cite the specific quarter or TTM figure for each."
+            ),
+            ticker="MSFT",
+        )
+    )
+
+    assert result is not None
+    progress_messages, answer = result
+    assert progress_messages == ["analyzing quarterly financials", "computing trailing-twelve-month metrics"]
+    assert "Bull datapoint: Quarter ended March 31, 2026 generated $30.25B of net income" in answer
+    assert "16.67% net margin" in answer
+    assert "Bear datapoint: Latest trailing-twelve-month free cash flow was -$2.47B." in answer
+    assert "$17.80B" not in answer
+    assert "-$18.17B" not in answer
+
+
+@pytest.mark.asyncio
+async def test_try_direct_answer_handles_ttm_revenue_and_net_income_snapshot(monkeypatch):
+    monkeypatch.setattr(
+        chat_module,
+        "analytics_ttm_metrics",
+        lambda *args, **kwargs: {"revenue": 451_442_000_000.0, "net_income": 122_575_000_000.0},
+    )
+
+    result = await chat_module._try_direct_answer(
+        ChatRequest(
+            message="What are Apple's latest trailing-twelve-month revenue and net income? Answer with the figures and a short interpretation.",
+            ticker="AAPL",
+        )
+    )
+
+    assert result is not None
+    progress_messages, answer = result
+    assert progress_messages == ["computing trailing-twelve-month metrics"]
+    assert "$451.44B" in answer
+    assert "$122.58B" in answer
+    assert "27.15%" in answer
 
 
 @pytest.mark.asyncio
@@ -1606,6 +1877,44 @@ async def test_try_direct_answer_handles_recent_beneficial_ownership_filings(mon
     assert "2026-04-30 — SCHEDULE 13G — reported ownership 7.22%" in answer
     assert "2026-03-27 — SCHEDULE 13G/A — reported ownership 0%" in answer
     assert "Anghami" not in answer
+
+
+@pytest.mark.asyncio
+async def test_try_direct_answer_handles_latest_beneficial_ownership_snapshot(monkeypatch):
+    monkeypatch.setattr(
+        chat_module,
+        "analytics_summarize_beneficial_ownership",
+        lambda *args, **kwargs: {
+            "issuer_name": "Palantir Technologies Inc",
+            "latest_accession_number": "0002100119-26-000893",
+            "latest_form_type": "SCHEDULE 13G",
+            "latest_filing_date": "2026-04-30",
+            "latest_total_percent": 7.28,
+            "latest_reporting_person_names": ["Vanguard Capital Management"],
+            "latest_rule_designation": "Rule 13d-1(b)",
+            "latest_is_passive_investor": True,
+        },
+    )
+
+    result = await chat_module._try_direct_answer(
+        ChatRequest(
+            message=(
+                "What does Palantir's latest beneficial ownership filing say about the filer, "
+                "the reported ownership percentage, and whether the position is passive or activist?"
+            ),
+            ticker="PLTR",
+        )
+    )
+
+    assert result is not None
+    progress_messages, answer = result
+    assert progress_messages == ["summarizing beneficial ownership filings"]
+    assert "filed 2026-04-30" in answer
+    assert "accession 0002100119-26-000893" in answer
+    assert "Filer: Vanguard Capital Management" in answer
+    assert "Reported ownership percentage: 7.28%" in answer
+    assert "Passive or activist: Passive (Rule 13d-1(b))." in answer
+    assert "Surf Air" not in answer
 
 
 @pytest.mark.asyncio
@@ -1833,8 +2142,10 @@ def test_tool_guidance_messages_add_latest_proxy_and_13f_hints():
         )
     )
 
+    assert any("Normalized research intent: latest_proxy_statement" in message["content"] for message in proxy_guidance)
     assert any("get_proxy_statement_data with limit=1" in message["content"] for message in proxy_guidance)
-    assert any("Use the manager or filer named in the question" in message["content"] for message in holdings_guidance)
+    assert any("Normalized research intent: latest_institutional_holdings" in message["content"] for message in holdings_guidance)
+    assert any("the manager or filer named in the question" in message["content"] for message in holdings_guidance)
 
 
 def test_normalize_optional_str_list_handles_empty_sentinels():

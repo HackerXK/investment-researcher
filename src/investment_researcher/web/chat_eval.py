@@ -75,6 +75,7 @@ class ChatEvalQuestionLike(Protocol):
     evidence_kind: str
     evidence_params: dict[str, Any]
     must_cover: tuple[str, ...]
+    evaluation_focus: tuple[str, ...]
     smoke: bool
     chat_timeout_seconds: int
     evaluation_timeout_seconds: int
@@ -108,12 +109,20 @@ class EvaluationVerdict:
     faithfulness: str = "fail"
     factual_grounding: str = "fail"
     completeness: str = "fail"
+    source_traceability: str = "not_applicable"
+    confidence_calibration: str = "not_applicable"
+    staleness_handling: str = "not_applicable"
+    disconfirming_evidence: str = "not_applicable"
+    multi_hop_reasoning: str = "not_applicable"
     reason: str = ""
     pass_reasons: list[str] = field(default_factory=list)
     fail_reasons: list[str] = field(default_factory=list)
     unsupported_claims: list[str] = field(default_factory=list)
     missing_key_facts: list[str] = field(default_factory=list)
     ambiguity_notes: list[str] = field(default_factory=list)
+    citation_gaps: list[str] = field(default_factory=list)
+    stale_data_concerns: list[str] = field(default_factory=list)
+    reasoning_gaps: list[str] = field(default_factory=list)
     raw_response: str = ""
     error: str | None = None
 
@@ -133,6 +142,7 @@ class ChatEvaluationResult:
     evidence_kind: str
     evidence_summary: str
     evidence_payload: Any
+    evaluation_focus: list[str]
     chat: ChatRunOutcome
     evaluation: EvaluationVerdict
 
@@ -151,6 +161,7 @@ class ChatEvaluationResult:
             "evidence_kind": self.evidence_kind,
             "evidence_summary": self.evidence_summary,
             "evidence_payload": self.evidence_payload,
+            "evaluation_focus": self.evaluation_focus,
             "chat": asdict(self.chat),
             "evaluation": asdict(self.evaluation),
         }
@@ -1045,13 +1056,17 @@ def _extract_json_object(raw_text: str) -> dict[str, Any]:
     text = raw_text.strip()
     if not text:
         raise ValueError("empty evaluator response")
+
+    def _sanitize(candidate: str) -> str:
+        return re.sub(r'("([^"]+)":\s*)"\2":', r"\1", candidate)
+
     try:
-        return json.loads(text)
+        return json.loads(_sanitize(text))
     except json.JSONDecodeError:
         match = re.search(r"\{.*\}", text, re.DOTALL)
         if not match:
             raise
-        return json.loads(match.group(0))
+        return json.loads(_sanitize(match.group(0)))
 
 
 def _coerce_text_field(value: Any, default: str) -> str:
@@ -1087,15 +1102,34 @@ async def evaluate_answer(
         "key requested facts. If the evidence is insufficient, mark the result as fail. "
         "Return JSON only."
     )
+    evaluation_focus = ", ".join(question.evaluation_focus) or "none"
     user_prompt = (
         "Evaluate the assistant answer for faithfulness and factual grounding.\n\n"
         "Return a JSON object with exactly these keys:\n"
-        "overall, faithfulness, factual_grounding, completeness, reason, "
-        "pass_reasons, fail_reasons, unsupported_claims, missing_key_facts, ambiguity_notes.\n\n"
+        "overall, faithfulness, factual_grounding, completeness, source_traceability, "
+        "confidence_calibration, staleness_handling, disconfirming_evidence, "
+        "multi_hop_reasoning, reason, pass_reasons, fail_reasons, unsupported_claims, "
+        "missing_key_facts, ambiguity_notes, citation_gaps, stale_data_concerns, reasoning_gaps.\n\n"
+        "For source_traceability, confidence_calibration, staleness_handling, "
+        "disconfirming_evidence, and multi_hop_reasoning, return one of: pass, fail, "
+        "not_applicable.\n"
+        "- source_traceability: pass only when the answer cites accession numbers, filing "
+        "dates, section names, or other provenance when the question or evaluation focus "
+        "requires it.\n"
+        "- confidence_calibration: pass only when the answer avoids overstating certainty "
+        "and clearly signals limits when evidence is partial or mixed.\n"
+        "- staleness_handling: pass only when the answer handles latest/recent/as-of timing "
+        "correctly and does not present stale evidence as current.\n"
+        "- disconfirming_evidence: pass only when the answer includes a meaningful contrary "
+        "or risk datapoint when the question or evaluation focus requires balance.\n"
+        "- multi_hop_reasoning: pass only when multi-part synthesis steps are consistent and "
+        "anchored in the supplied evidence rather than unsupported inference.\n\n"
         f"Question ID: {question.question_id}\n"
         f"Question: {question.prompt}\n"
         f"Expected tools: {', '.join(question.expected_tools)}\n"
         f"Must cover: {', '.join(question.must_cover) or 'none'}\n\n"
+        f"Evaluation focus: {evaluation_focus}\n"
+        f"Notes: {question.notes or 'none'}\n\n"
         f"Assistant answer:\n{answer}\n\n"
         f"Authoritative evidence ({evidence.kind}):\n{evidence.summary}\n"
     )
@@ -1152,12 +1186,20 @@ async def evaluate_answer(
         faithfulness=_coerce_text_field(parsed.get("faithfulness"), "fail"),
         factual_grounding=_coerce_text_field(parsed.get("factual_grounding"), "fail"),
         completeness=_coerce_text_field(parsed.get("completeness"), "fail"),
+        source_traceability=_coerce_text_field(parsed.get("source_traceability"), "not_applicable"),
+        confidence_calibration=_coerce_text_field(parsed.get("confidence_calibration"), "not_applicable"),
+        staleness_handling=_coerce_text_field(parsed.get("staleness_handling"), "not_applicable"),
+        disconfirming_evidence=_coerce_text_field(parsed.get("disconfirming_evidence"), "not_applicable"),
+        multi_hop_reasoning=_coerce_text_field(parsed.get("multi_hop_reasoning"), "not_applicable"),
         reason=_coerce_text_field(parsed.get("reason"), ""),
         pass_reasons=_coerce_text_list(parsed.get("pass_reasons")),
         fail_reasons=_coerce_text_list(parsed.get("fail_reasons")),
         unsupported_claims=_coerce_text_list(parsed.get("unsupported_claims")),
         missing_key_facts=_coerce_text_list(parsed.get("missing_key_facts")),
         ambiguity_notes=_coerce_text_list(parsed.get("ambiguity_notes")),
+        citation_gaps=_coerce_text_list(parsed.get("citation_gaps")),
+        stale_data_concerns=_coerce_text_list(parsed.get("stale_data_concerns")),
+        reasoning_gaps=_coerce_text_list(parsed.get("reasoning_gaps")),
         raw_response=raw_text,
     )
 
@@ -1221,6 +1263,7 @@ async def evaluate_question(app: Any, question: ChatEvalQuestionLike) -> ChatEva
         evidence_kind=evidence.kind,
         evidence_summary=evidence.summary,
         evidence_payload=evidence.payload,
+        evaluation_focus=list(question.evaluation_focus),
         chat=chat,
         evaluation=evaluation,
     )
@@ -1261,6 +1304,12 @@ def build_markdown_summary(results: list[ChatEvaluationResult]) -> str:
                 f"- Reason: {result.evaluation.reason}",
                 f"- Expected tools: {', '.join(result.expected_tools)}",
                 f"- Must cover: {', '.join(result.must_cover) or 'none'}",
+                f"- Evaluation focus: {', '.join(result.evaluation_focus) or 'none'}",
+                f"- Source traceability: {result.evaluation.source_traceability}",
+                f"- Confidence calibration: {result.evaluation.confidence_calibration}",
+                f"- Staleness handling: {result.evaluation.staleness_handling}",
+                f"- Disconfirming evidence: {result.evaluation.disconfirming_evidence}",
+                f"- Multi-hop reasoning: {result.evaluation.multi_hop_reasoning}",
                 "",
                 "### Prompt",
                 "",
@@ -1289,6 +1338,18 @@ def build_markdown_summary(results: list[ChatEvaluationResult]) -> str:
                 "### Missing Key Facts",
                 "",
                 *(result.evaluation.missing_key_facts or ["- none"]),
+                "",
+                "### Citation Gaps",
+                "",
+                *(result.evaluation.citation_gaps or ["- none"]),
+                "",
+                "### Stale Data Concerns",
+                "",
+                *(result.evaluation.stale_data_concerns or ["- none"]),
+                "",
+                "### Reasoning Gaps",
+                "",
+                *(result.evaluation.reasoning_gaps or ["- none"]),
                 "",
             ]
         )

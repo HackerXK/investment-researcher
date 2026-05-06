@@ -2,6 +2,13 @@
 
 Repo-wide instructions for AI coding agents. Keep changes aligned with the existing architecture, prefer linked docs over duplicated explanations, and validate behavior with the narrowest relevant test command.
 
+## Project Priorities
+
+- Accuracy first. Prefer evidence-rich, traceable, backend-enforced correctness over speed, token savings, UI polish, or minimal tool usage.
+- Local-LLM first. Assume the primary chat and evaluation runtime is a local OpenAI-compatible model endpoint; optimize prompts, tool contracts, and validation for research quality rather than hosted-model cost control.
+- Backend first. The product value is the ingestion, analytics, SEC research, and evaluation stack. Treat the frontend as a demonstration and interaction layer for backend capabilities, not the source of business logic.
+- Preserve evidence contracts. When changing agent or chat behavior, prefer structured tool outputs, provenance metadata, explicit validation, and evaluator-visible evidence over hidden prompt tricks.
+
 ## Read First
 
 Read the relevant docs before architecture, ingestion, analytics, agent, or evaluation changes:
@@ -19,8 +26,8 @@ Prefer linking to these docs over duplicating long explanations.
 
 - `src/investment_researcher/ingestion/`: SEC ingestion, DuckDB writes, SQLite state, Prefect flows.
 - `src/investment_researcher/analytics/`: DuckDB-backed metrics, TTM, ratios, and structured SEC helpers. Ratios are computed on demand, not persisted.
-- `src/investment_researcher/web/`: FastAPI API, OpenAI Agents SDK tool wrappers, SSE chat, live chat eval, tracing hooks.
-- `frontend/`: Nuxt 3 UI and SSE chat client.
+- `src/investment_researcher/web/`: FastAPI API, OpenAI Agents SDK tool wrappers, SSE chat, live chat eval, tracing hooks, and research-execution orchestration for the local-LLM backend.
+- `frontend/`: Nuxt 3 UI and SSE chat client used primarily to demonstrate and inspect backend research capabilities.
 - `src/investment_researcher/service.py`: service entrypoint; auto-seeds on empty state and registers Prefect deployments.
 
 ## Commands
@@ -39,6 +46,7 @@ Prefer linking to these docs over duplicating long explanations.
 - Prefer the narrowest relevant test command for the change.
 - For pure analytics changes, run focused analytics or unit tests before broader test suites.
 - For chat, agent tools, or response behavior changes, run `pytest tests/test_chat_agent.py -v`.
+- For evaluation, evidence, or answer-quality rubric changes, run `pytest tests/test_chat_eval.py -v` before broader suites.
 - Run `python scripts/run_live_chat_eval.py --smoke` only when live credentials and network access are available.
 - Keep full live eval opt-in because it may use networked services and model or API calls.
 
@@ -77,6 +85,7 @@ Prefer linking to these docs over duplicating long explanations.
 - Keep components focused on presentation and user interaction; move reusable logic into composables or utilities.
 - Prefer typed props, emits, API responses, and shared interfaces where practical.
 - Keep API and SSE client behavior compatible with the backend contracts.
+- Do not move research logic, evidence selection, or financial interpretation into the frontend unless the task explicitly requires a presentation-only transform.
 - Treat SSE event semantics as a backend contract; parse and present `progress`, `token`, `error`, and `data: [DONE]` without redefining their meaning or order in the frontend.
 - Handle loading, empty, error, and partial-streaming states explicitly.
 - Avoid duplicating backend business logic in the frontend unless needed for user experience.
@@ -93,6 +102,7 @@ Prefer linking to these docs over duplicating long explanations.
 ## Layer Boundaries And Contracts
 
 - Preserve the current boundary: ingestion writes normalized metrics, analytics derives TTM and ratios, and the web layer formats and streams results.
+- Prefer explicit query normalization and structured evidence contracts over hidden prompt-only steering when agent routing needs to be more accurate.
 - Prefer existing structured SEC helpers in `src/investment_researcher/analytics/sec_filings.py` and `src/investment_researcher/web/agent_tools.py` over adding new raw parsing paths.
 - For SEC question answering, prefer structured tool outputs before raw filing text. Use full filing text only when the structured tools cannot answer the question.
 - Agent and API outputs must remain JSON-safe; sanitize `NaN` and `Inf` to `None`.

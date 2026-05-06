@@ -24,6 +24,7 @@ class ChatEvalQuestion:
     evidence_kind: str = ""
     evidence_params: dict[str, Any] = field(default_factory=dict)
     must_cover: tuple[str, ...] = ()
+    evaluation_focus: tuple[str, ...] = ()
     smoke: bool = False
     chat_timeout_seconds: int = 300
     evaluation_timeout_seconds: int = 300
@@ -104,6 +105,7 @@ CHAT_EVAL_QUESTIONS: tuple[ChatEvalQuestion, ...] = (
             "limit": 50,
         },
         must_cover=("item", "8-K"),
+        evaluation_focus=("staleness_handling",),
         notes="Structured SEC events question that avoids raw filing scraping.",
     ),
     ChatEvalQuestion(
@@ -123,6 +125,7 @@ CHAT_EVAL_QUESTIONS: tuple[ChatEvalQuestion, ...] = (
             "proxy_start_date": "2024-01-01",
         },
         must_cover=("CEO compensation", "pay-versus-performance"),
+        evaluation_focus=("source_traceability", "staleness_handling"),
         notes="Structured proxy-statement question grounded in DEF 14A data.",
     ),
     ChatEvalQuestion(
@@ -191,6 +194,7 @@ CHAT_EVAL_QUESTIONS: tuple[ChatEvalQuestion, ...] = (
             "include_amendments": False,
         },
         must_cover=("accession number", "item codes", "headings"),
+        evaluation_focus=("source_traceability", "staleness_handling"),
         notes="Section-discovery question for a recent retail 8-K.",
     ),
     ChatEvalQuestion(
@@ -212,6 +216,7 @@ CHAT_EVAL_QUESTIONS: tuple[ChatEvalQuestion, ...] = (
             "include_amendments": False,
         },
         must_cover=("two risk themes", "accession number"),
+        evaluation_focus=("source_traceability", "staleness_handling"),
         notes="Targeted Item 1A section-read question for a healthcare megacap.",
     ),
     ChatEvalQuestion(
@@ -233,6 +238,7 @@ CHAT_EVAL_QUESTIONS: tuple[ChatEvalQuestion, ...] = (
             "include_amendments": False,
         },
         must_cover=("two highlights", "accession number"),
+        evaluation_focus=("source_traceability", "staleness_handling"),
         notes="Targeted MD&A section-read question for a large-cap hardware and services company.",
     ),
     ChatEvalQuestion(
@@ -255,6 +261,7 @@ CHAT_EVAL_QUESTIONS: tuple[ChatEvalQuestion, ...] = (
             "include_amendments": False,
         },
         must_cover=("China", "accession number", "section"),
+        evaluation_focus=("source_traceability", "staleness_handling"),
         notes="Search-oriented filing question for a global consumer brand.",
     ),
     ChatEvalQuestion(
@@ -275,6 +282,7 @@ CHAT_EVAL_QUESTIONS: tuple[ChatEvalQuestion, ...] = (
             "period_type": "annual",
         },
         must_cover=("revenue growth", "net profit margin"),
+        evaluation_focus=("multi_hop_reasoning", "confidence_calibration"),
         notes="Two-tool synthesis across revenue growth and profitability trend.",
     ),
     ChatEvalQuestion(
@@ -311,7 +319,44 @@ CHAT_EVAL_QUESTIONS: tuple[ChatEvalQuestion, ...] = (
             "annual_periods": 4,
         },
         must_cover=("eight quarters", "free cash flow", "margin"),
+        evaluation_focus=("multi_hop_reasoning", "confidence_calibration"),
         notes="Multi-tool quarterly plus TTM synthesis.",
+    ),
+    ChatEvalQuestion(
+        question_id="amzn-bull-bear-quarterly-and-ttm",
+        title="AMZN bull and bear datapoints",
+        ticker="AMZN",
+        prompt=(
+            "Using Amazon's last eight quarters plus its latest trailing-twelve-month free cash flow, "
+            "give one bull datapoint and one bear datapoint. Cite the specific quarter or TTM figure for each."
+        ),
+        difficulty="complex",
+        expected_tools=("get_quarterly_detail", "get_ttm_metrics", "get_ttm_ratios"),
+        evidence_kind="quarterly_and_ttm",
+        evidence_params={
+            "ticker": "AMZN",
+            "quarterly_metrics": ["revenue"],
+            "quarterly_ratio_names": [
+                "gross_profit_margin",
+                "operating_profit_margin",
+                "net_profit_margin",
+            ],
+            "annual_ratio_names": [
+                "gross_profit_margin",
+                "operating_profit_margin",
+                "net_profit_margin",
+                "free_cash_flow_to_operating_cash_flow_ratio",
+                "capital_expenditure_coverage_ratio",
+                "financial_leverage_ratio",
+            ],
+            "ttm_metrics": ["free_cash_flow"],
+            "ttm_ratio_names": ["net_profit_margin", "operating_profit_margin"],
+            "n_quarters": 8,
+            "annual_periods": 4,
+        },
+        must_cover=("bull datapoint", "bear datapoint", "specific quarter or TTM figure"),
+        evaluation_focus=("disconfirming_evidence", "confidence_calibration", "multi_hop_reasoning"),
+        notes="Balanced-evidence synthesis that should surface both supportive and contrary datapoints from the same evidence bundle.",
     ),
     ChatEvalQuestion(
         question_id="meta-insider-sells-and-proxy",
@@ -333,6 +378,7 @@ CHAT_EVAL_QUESTIONS: tuple[ChatEvalQuestion, ...] = (
             "proxy_start_date": "2024-01-01",
         },
         must_cover=("insider sells", "CEO compensation"),
+        evaluation_focus=("multi_hop_reasoning", "confidence_calibration"),
         notes="Cross-filing synthesis: Form 4 plus DEF 14A.",
     ),
     ChatEvalQuestion(
@@ -348,6 +394,7 @@ CHAT_EVAL_QUESTIONS: tuple[ChatEvalQuestion, ...] = (
         evidence_kind="latest_filing_text",
         evidence_params={"ticker": "NVDA", "form_type": "10-K", "limit": 1},
         must_cover=("two risk themes", "accession number"),
+        evaluation_focus=("source_traceability", "staleness_handling"),
         notes="Raw filing read path; keep out of smoke mode because it depends on full filing text availability.",
     ),
     ChatEvalQuestion(
@@ -368,6 +415,7 @@ CHAT_EVAL_QUESTIONS: tuple[ChatEvalQuestion, ...] = (
             "period_type": "annual",
         },
         must_cover=("8-K", "free cash flow", "capex"),
+        evaluation_focus=("staleness_handling", "multi_hop_reasoning"),
         notes="Structured events plus financial-statement synthesis.",
     ),
     ChatEvalQuestion(
@@ -390,6 +438,7 @@ CHAT_EVAL_QUESTIONS: tuple[ChatEvalQuestion, ...] = (
             "include_amendments": False,
         },
         must_cover=("new emphasis", "both accession numbers"),
+        evaluation_focus=("source_traceability", "multi_hop_reasoning", "staleness_handling"),
         notes="Year-over-year risk-factor comparison for an industrial/logistics company.",
     ),
     ChatEvalQuestion(

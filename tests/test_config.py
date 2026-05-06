@@ -1,9 +1,10 @@
 """Tests for the config module."""
 
-import os
-from unittest.mock import patch
-
-from investment_researcher.config import PROJECT_ROOT, DEFAULT_RAW_FILING_TICKERS, _parse_raw_filing_tickers
+from investment_researcher.config import (
+    DEFAULT_RAW_FILING_TICKERS,
+    PROJECT_ROOT,
+    _parse_raw_filing_tickers,
+)
 
 
 class TestConfig:

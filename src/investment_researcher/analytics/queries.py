@@ -161,7 +161,7 @@ def metric_timeseries(
         placeholders = ", ".join(f"'{m}'" for m in metrics)
         return con.execute(
             f"""
-            SELECT metric_type, value, period_end
+                        SELECT metric_type, value, period_end
             FROM financial_metrics
             WHERE ticker = $1
               AND period_type = $2

@@ -1,5 +1,7 @@
 """Configuration — loads environment variables for all modules."""
 
+from __future__ import annotations
+
 import os
 from pathlib import Path
 

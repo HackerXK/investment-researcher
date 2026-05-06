@@ -713,6 +713,22 @@ def test_build_evidence_bundle_compares_latest_filing_section(monkeypatch):
     assert evidence.payload["previous_filing"]["accession_number"] == "0001090727-25-000010"
 
 
+def test_extract_json_object_repairs_repeated_field_name():
+    raw_text = (
+        '{'
+        '"overall":"pass",'
+        '"faithfulness":"pass",'
+        '"factual_grounding":"pass",'
+        '"completeness":"completeness":"pass"'
+        '}'
+    )
+
+    parsed = chat_eval._extract_json_object(raw_text)
+
+    assert parsed["overall"] == "pass"
+    assert parsed["completeness"] == "pass"
+
+
 def test_chat_eval_question_corpus_includes_recent_sec_tool_questions():
     questions = {question.question_id: question for question in get_chat_eval_questions()}
 
@@ -803,12 +819,20 @@ async def test_evaluate_answer_handles_nullable_evaluator_fields(monkeypatch):
                                 '"faithfulness":"pass",'
                                 '"factual_grounding":"pass",'
                                 '"completeness":"pass",'
+                                '"source_traceability":null,'
+                                '"confidence_calibration":null,'
+                                '"staleness_handling":null,'
+                                '"disconfirming_evidence":null,'
+                                '"multi_hop_reasoning":null,'
                                 '"reason":null,'
                                 '"pass_reasons":null,'
                                 '"fail_reasons":null,'
                                 '"unsupported_claims":null,'
                                 '"missing_key_facts":null,'
-                                '"ambiguity_notes":null'
+                                '"ambiguity_notes":null,'
+                                '"citation_gaps":null,'
+                                '"stale_data_concerns":null,'
+                                '"reasoning_gaps":null'
                                 '}'
                             )
                         )
@@ -824,6 +848,8 @@ async def test_evaluate_answer_handles_nullable_evaluator_fields(monkeypatch):
         prompt="What are Berkshire Hathaway's top holdings in its latest 13F filing?",
         expected_tools=("summarize_institutional_holdings",),
         must_cover=("top holdings",),
+        evaluation_focus=(),
+        notes="",
         evaluation_timeout_seconds=5,
     )
     evidence = chat_eval.EvidenceBundle(
@@ -837,8 +863,16 @@ async def test_evaluate_answer_handles_nullable_evaluator_fields(monkeypatch):
     assert verdict.status == "ok"
     assert verdict.overall == "pass"
     assert verdict.reason == ""
+    assert verdict.source_traceability == "not_applicable"
+    assert verdict.confidence_calibration == "not_applicable"
+    assert verdict.staleness_handling == "not_applicable"
+    assert verdict.disconfirming_evidence == "not_applicable"
+    assert verdict.multi_hop_reasoning == "not_applicable"
     assert verdict.pass_reasons == []
     assert verdict.fail_reasons == []
     assert verdict.unsupported_claims == []
     assert verdict.missing_key_facts == []
     assert verdict.ambiguity_notes == []
+    assert verdict.citation_gaps == []
+    assert verdict.stale_data_concerns == []
+    assert verdict.reasoning_gaps == []

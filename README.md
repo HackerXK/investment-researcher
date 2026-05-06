@@ -1,7 +1,13 @@
 # Investment Researcher
 
-Investment Researcher is a local SEC ingestion pipeline plus financial research platform.
+Investment Researcher is an accuracy-first local SEC ingestion pipeline plus financial research platform.
 It downloads SEC filing data via [edgartools](https://github.com/dgunning/edgartools), stores raw filings on disk, writes normalized financial metrics into DuckDB, computes on-the-fly ratios and TTM metrics, and serves scheduled Prefect flows for ongoing updates.
+
+Current product priorities:
+
+- Accuracy first: backend research quality, evidence traceability, and explicit validation take precedence over speed or token thrift.
+- Local-LLM first: the chat and evaluation stack is designed to run against a local OpenAI-compatible endpoint.
+- Backend first: the frontend is a demonstration and inspection layer for the research backend, not the system of record for business logic.
 
 Four main workflows:
 
@@ -26,7 +32,7 @@ Four main workflows:
 
 - Built with the [OpenAI Agents SDK](https://github.com/openai/openai-agents-python) using `OpenAIChatCompletionsModel` for compatibility with local vLLM / any OpenAI-compatible endpoint.
 - The agent has 32 tools wrapping the analytics and SEC research surface: company discovery, time-series analytics, ratios, cross-company comparison, filing discovery, section-aware filing reading, targeted filing search, filing-to-filing section comparison, structured beneficial ownership analysis for Schedule 13D and 13G, and structured Form 4, 8-K, DEF 14A, and 13F analysis.
-- Streams responses via SSE (`data: {"token": "..."}` / `data: [DONE]`) to the Nuxt 3 frontend chat panel.
+- Streams responses via SSE (`data: {"token": "..."}` / `data: [DONE]`) to the Nuxt 3 frontend chat panel, which primarily serves as a demo surface for backend tooling.
 - Tracing is disabled by default (no OpenAI platform key needed).
 
 **Service startup** sequence:
